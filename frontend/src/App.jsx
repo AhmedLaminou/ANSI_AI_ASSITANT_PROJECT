@@ -1,0 +1,1026 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import './App.css'
+
+const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+const ROLES = ['admin', 'document_manager', 'user']
+const CLASSIFICATIONS = ['interne', 'direction', 'confidentiel']
+
+async function request(path, options = {}) {
+  const response = await fetch(`${API_URL}${path}`, { credentials: 'include', ...options })
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}))
+    throw new Error(body.detail ?? 'Une erreur est survenue.')
+  }
+  return response.status === 204 ? null : response.json()
+}
+
+// ---------------------------------------------------------------------------
+// Small building blocks: icons, theme, toasts, rich-text rendering
+// ---------------------------------------------------------------------------
+
+function Icon({ name, className = '' }) {
+  return (
+    <svg className={`icon ${className}`} aria-hidden="true">
+      <use href={`/icons.svg#icon-${name}`} />
+    </svg>
+  )
+}
+
+function getInitialTheme() {
+  try {
+    const stored = window.localStorage.getItem('ansi-theme')
+    if (stored === 'light' || stored === 'dark') return stored
+  } catch {
+    // Private browsing or storage disabled: fall through to system preference.
+  }
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function useTheme() {
+  const [theme, setTheme] = useState(getInitialTheme)
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    try {
+      window.localStorage.setItem('ansi-theme', theme)
+    } catch {
+      // Nothing to persist to; the toggle still works for this session.
+    }
+  }, [theme])
+  return [theme, () => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))]
+}
+
+function useToasts() {
+  const [toasts, setToasts] = useState([])
+  function push(message, tone = 'info') {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    setToasts((current) => [...current, { id, message, tone }])
+    setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), 3600)
+  }
+  return { toasts, push }
+}
+
+function ToastStack({ toasts }) {
+  if (!toasts.length) return null
+  return (
+    <div className="toast-stack" role="status" aria-live="polite">
+      {toasts.map((toast) => (
+        <div className={`toast ${toast.tone}`} key={toast.id}>
+          {toast.tone === 'success' && <Icon name="check" />}
+          {toast.tone === 'error' && <Icon name="close" />}
+          <span>{toast.message}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** Minimal, dependency-free renderer: bold, inline code, and lists only.
+ * Builds React elements directly (never dangerouslySetInnerHTML) because
+ * assistant answers are derived from untrusted document content. */
+function renderInline(text, keyPrefix) {
+  const nodes = []
+  const pattern = /(\*\*[^*]+\*\*|`[^`]+`)/g
+  let lastIndex = 0
+  let match
+  let index = 0
+  while ((match = pattern.exec(text))) {
+    if (match.index > lastIndex) nodes.push(text.slice(lastIndex, match.index))
+    const token = match[0]
+    if (token.startsWith('**')) {
+      nodes.push(<strong key={`${keyPrefix}-b${index}`}>{token.slice(2, -2)}</strong>)
+    } else {
+      nodes.push(<code key={`${keyPrefix}-c${index}`}>{token.slice(1, -1)}</code>)
+    }
+    lastIndex = pattern.lastIndex
+    index += 1
+  }
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex))
+  return nodes
+}
+
+function renderRichText(content) {
+  const lines = content.split('\n')
+  const blocks = []
+  let listBuffer = []
+  let listType = null
+
+  function flushList() {
+    if (!listBuffer.length) return
+    const ListTag = listType === 'ol' ? 'ol' : 'ul'
+    blocks.push(
+      <ListTag key={`list-${blocks.length}`}>
+        {listBuffer.map((item, itemIndex) => (
+          <li key={itemIndex}>{renderInline(item, `li-${blocks.length}-${itemIndex}`)}</li>
+        ))}
+      </ListTag>,
+    )
+    listBuffer = []
+    listType = null
+  }
+
+  lines.forEach((rawLine, lineIndex) => {
+    const line = rawLine.trim()
+    if (!line) {
+      flushList()
+      return
+    }
+    const bulletMatch = line.match(/^[-*]\s+(.*)/)
+    const orderedMatch = line.match(/^\d+[.)]\s+(.*)/)
+    if (bulletMatch) {
+      if (listType !== 'ul') flushList()
+      listType = 'ul'
+      listBuffer.push(bulletMatch[1])
+      return
+    }
+    if (orderedMatch) {
+      if (listType !== 'ol') flushList()
+      listType = 'ol'
+      listBuffer.push(orderedMatch[1])
+      return
+    }
+    flushList()
+    blocks.push(<p key={`p-${blocks.length}-${lineIndex}`}>{renderInline(line, `p-${blocks.length}-${lineIndex}`)}</p>)
+  })
+  flushList()
+  return blocks
+}
+
+async function copyToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const helper = document.createElement('textarea')
+  helper.value = text
+  helper.style.position = 'fixed'
+  helper.style.opacity = '0'
+  document.body.appendChild(helper)
+  helper.select()
+  document.execCommand('copy')
+  document.body.removeChild(helper)
+}
+
+// ---------------------------------------------------------------------------
+// Screens
+// ---------------------------------------------------------------------------
+
+function Login({ onLogin, theme, onToggleTheme }) {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function submit(event) {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      await request('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      })
+      onLogin(await request('/auth/me'))
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <main className="login-layout">
+      <button className="theme-toggle floating" onClick={onToggleTheme} title="Changer de thème">
+        <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
+      </button>
+      <section className="brand-panel">
+        <div className="brand-mark">A</div>
+        <p className="overline inverse">ANSI · ENVIRONNEMENT LOCAL</p>
+        <h1>La connaissance interne, sans quitter votre environnement.</h1>
+        <p>
+          Un assistant documentaire contrôlé&nbsp;: il cherche dans les documents autorisés, répond avec ses sources
+          et garde les données sur l'infrastructure locale.
+        </p>
+        <div className="security-note">
+          <Icon name="shield" />
+          Accès réservé aux utilisateurs authentifiés
+        </div>
+      </section>
+      <section className="login-panel">
+        <form className="login-card" onSubmit={submit}>
+          <p className="overline">ACCÈS SÉCURISÉ</p>
+          <h2>Bienvenue</h2>
+          <p className="subtle">Connectez-vous pour accéder à votre espace documentaire.</p>
+          <label>
+            Identifiant
+            <input
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              autoComplete="username"
+              minLength="3"
+              required
+            />
+          </label>
+          <label>
+            Mot de passe
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="current-password"
+              minLength="8"
+              required
+            />
+          </label>
+          {error && <p className="error">{error}</p>}
+          <button className="primary full" disabled={busy}>
+            {busy ? 'Connexion…' : "Accéder à l'assistant →"}
+          </button>
+          <p className="form-note">Ce POC ne transmet ni vos questions ni vos documents vers une API IA externe.</p>
+        </form>
+      </section>
+    </main>
+  )
+}
+
+function Overview({ documents, system, user, onNavigate }) {
+  const ready = system?.chat_model_ready && system?.embedding_model_ready
+  return (
+    <section className="workspace overview">
+      <div className="page-intro">
+        <div>
+          <p className="overline">ESPACE DE TRAVAIL</p>
+          <h1>Bonjour, {user.username}.</h1>
+          <p>Interrogez les informations documentées, avec une réponse traçable et limitée à vos autorisations.</p>
+        </div>
+        <div className={`readiness ${ready ? 'ready' : 'warning'}`}>
+          <Icon name={ready ? 'check' : 'spark'} />
+          <div>
+            <strong>{ready ? 'Services locaux disponibles' : 'Vérification requise'}</strong>
+            <small>{ready ? `${system.chat_model} + ${system.embedding_model}` : 'Ollama ou un modèle est indisponible'}</small>
+          </div>
+        </div>
+      </div>
+      <div className="metric-grid">
+        <article>
+          <span className="metric-icon"><Icon name="folder" /></span>
+          <p>Documents accessibles</p>
+          <strong>{documents.length}</strong>
+          <button onClick={() => onNavigate('documents')}>Consulter la base →</button>
+        </article>
+        <article>
+          <span className="metric-icon"><Icon name="doc-text" /></span>
+          <p>Réponses avec sources</p>
+          <strong>RAG</strong>
+          <small>Documents + pages citées</small>
+        </article>
+        <article>
+          <span className="metric-icon"><Icon name="shield" /></span>
+          <p>Exécution IA</p>
+          <strong>Locale</strong>
+          <small>Aucune API IA externe</small>
+        </article>
+      </div>
+      <div className="two-column">
+        <article className="info-card">
+          <p className="overline">COMMENT UTILISER L'ASSISTANT</p>
+          <h2>Une réponse utile est une réponse vérifiable.</h2>
+          <ol>
+            <li>Importez un document autorisé depuis la base documentaire.</li>
+            <li>Attribuez les rôles qui peuvent le consulter.</li>
+            <li>Posez une question précise dans l'Assistant.</li>
+            <li>Vérifiez les documents et pages affichés sous la réponse.</li>
+          </ol>
+          <button className="primary" onClick={() => onNavigate('chat')}>
+            Ouvrir l'assistant →
+          </button>
+        </article>
+        <article className="info-card tinted">
+          <p className="overline">GARDE-FOUS DU POC</p>
+          <ul className="check-list">
+            <li>
+              <Icon name="check" />
+              Une source indisponible doit produire un refus, pas une invention.
+            </li>
+            <li>
+              <Icon name="check" />
+              Les rôles filtrent les documents avant la recherche.
+            </li>
+            <li>
+              <Icon name="check" />
+              Les PDF scannés nécessitent encore un OCR local.
+            </li>
+            <li>
+              <Icon name="check" />
+              Toute réponse administrative importante reste validée par un agent.
+            </li>
+          </ul>
+        </article>
+      </div>
+    </section>
+  )
+}
+
+function ConversationRow({ conversation, isActive, onSelect, onRename, onDelete }) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(conversation.title)
+  const inputRef = useRef(null)
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus()
+  }, [editing])
+
+  function startEditing(event) {
+    event.stopPropagation()
+    setValue(conversation.title)
+    setEditing(true)
+  }
+
+  function commit() {
+    const trimmed = value.trim()
+    setEditing(false)
+    if (trimmed && trimmed !== conversation.title) onRename(conversation.id, trimmed)
+  }
+
+  return (
+    <div className={`conversation-row ${isActive ? 'selected' : ''}`}>
+      {editing ? (
+        <input
+          ref={inputRef}
+          className="conversation-rename"
+          value={value}
+          maxLength={160}
+          onChange={(event) => setValue(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') { event.preventDefault(); commit() }
+            if (event.key === 'Escape') { event.preventDefault(); setEditing(false) }
+          }}
+        />
+      ) : (
+        <button className="conversation-title" onClick={() => onSelect(conversation.id)} title={conversation.title}>
+          {conversation.title}
+        </button>
+      )}
+      <div className="conversation-actions">
+        <button title="Renommer" onClick={startEditing}>
+          <Icon name="pencil" />
+        </button>
+        <button title="Supprimer cette conversation" onClick={(event) => { event.stopPropagation(); onDelete(conversation.id) }}>
+          <Icon name="close" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function ChatView({
+  documents,
+  system,
+  conversations,
+  activeConversation,
+  messages,
+  onNewConversation,
+  onSelectConversation,
+  onRenameConversation,
+  onDeleteConversation,
+  onSend,
+  onToast,
+}) {
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const ready = system?.chat_model_ready && system?.embedding_model_ready
+
+  async function submit(event) {
+    event.preventDefault()
+    const question = message.trim()
+    if (!question || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      await onSend(question)
+      setMessage('')
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function copyMessage(content) {
+    try {
+      await copyToClipboard(content)
+      onToast('Réponse copiée.', 'success')
+    } catch {
+      onToast('Impossible de copier automatiquement.', 'error')
+    }
+  }
+
+  return (
+    <section className="assistant-workspace">
+      <aside className="conversation-sidebar">
+        <button className="new-conversation" onClick={onNewConversation}>
+          <Icon name="plus" /> Nouvelle conversation
+        </button>
+        <p className="conversation-label">VOS CONVERSATIONS</p>
+        <div className="conversation-list">
+          {conversations.length === 0 ? (
+            <p className="empty-list">Vos échanges documentaires apparaîtront ici.</p>
+          ) : (
+            conversations.map((conversation) => (
+              <ConversationRow
+                key={conversation.id}
+                conversation={conversation}
+                isActive={activeConversation?.id === conversation.id}
+                onSelect={onSelectConversation}
+                onRename={onRenameConversation}
+                onDelete={onDeleteConversation}
+              />
+            ))
+          )}
+        </div>
+        <div className="local-note">
+          <Icon name="shield" />
+          <p>Historique stocké localement et visible seulement par votre compte.</p>
+        </div>
+      </aside>
+      <main className="chat-main">
+        <header className="chat-head">
+          <div>
+            <p className="overline">ASSISTANT DOCUMENTAIRE</p>
+            <h2>{activeConversation?.title ?? 'Nouvelle conversation'}</h2>
+          </div>
+          <span className={`model-status ${ready ? 'ready' : 'warning'}`}>
+            {ready ? '● IA locale disponible' : '! Vérifier Ollama'}
+          </span>
+        </header>
+        {documents.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-icon"><Icon name="folder" /></div>
+            <h3>Aucun document accessible</h3>
+            <p>Un administrateur ou gestionnaire documentaire doit importer un document et vous autoriser à y accéder avant toute recherche.</p>
+          </div>
+        ) : (
+          <div className="conversation-content">
+            {messages.length === 0 ? (
+              <div className="welcome">
+                <p className="overline">PRÊT À RECHERCHER</p>
+                <h3>Que souhaitez-vous savoir&nbsp;?</h3>
+                <p>L'assistant recherche des passages pertinents dans vos documents autorisés, puis cite chaque source utilisée.</p>
+                <div className="suggestions">
+                  <button onClick={() => setMessage('Résume les principaux objectifs présentés dans les documents.')}>
+                    Résumer les objectifs
+                  </button>
+                  <button onClick={() => setMessage('Quelles sont les échéances mentionnées dans les documents ?')}>
+                    Identifier les échéances
+                  </button>
+                </div>
+              </div>
+            ) : (
+              messages.map((entry, entryIndex) => (
+                <article className={`message ${entry.role}`} key={entry.id ?? `${entry.role}-${entryIndex}`}>
+                  <div className="message-head">
+                    <p className="message-label">{entry.role === 'user' ? 'VOUS' : 'ASSISTANT ANSI'}</p>
+                    {entry.role === 'assistant' && (
+                      <button className="copy-button" title="Copier la réponse" onClick={() => copyMessage(entry.content)}>
+                        <Icon name="copy" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="message-body">{renderRichText(entry.content)}</div>
+                  {entry.sources?.length > 0 && (
+                    <div className="source-list">
+                      {entry.sources.map((source) => (
+                        <span className="source-pill" key={source.id}>
+                          {source.id} · {source.title} · p. {source.page}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              ))
+            )}
+            {busy && (
+              <article className="message assistant loading">
+                <p className="message-label">ASSISTANT ANSI</p>
+                <span></span>
+                <span></span>
+                <span></span>
+              </article>
+            )}
+          </div>
+        )}
+        <form className="composer" onSubmit={submit}>
+          <div className="composer-input">
+            <textarea
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  event.currentTarget.form?.requestSubmit()
+                }
+              }}
+              rows="3"
+              maxLength="4000"
+              placeholder={documents.length ? 'Posez une question précise sur les documents autorisés…' : 'Aucun document accessible…'}
+              disabled={!documents.length || busy}
+            />
+            <span className="char-count">{message.length}/4000</span>
+          </div>
+          {error && <p className="error">{error}</p>}
+          <div className="composer-footer">
+            <span>
+              {documents.length} document{documents.length > 1 ? 's' : ''} accessible{documents.length > 1 ? 's' : ''} · Entrée pour envoyer, Maj+Entrée pour un saut de ligne
+            </span>
+            <button className="primary" disabled={!documents.length || busy}>
+              <Icon name="send" /> {busy ? 'Analyse locale…' : 'Envoyer'}
+            </button>
+          </div>
+        </form>
+      </main>
+    </section>
+  )
+}
+
+function DocumentPreview({ preview, onClose }) {
+  if (!preview) return null
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="preview-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+        <header>
+          <div>
+            <p className="overline">APERÇU AUTORISÉ</p>
+            <h2>{preview.document.title}</h2>
+            <p>{preview.document.filename}</p>
+          </div>
+          <button className="modal-close" onClick={onClose}>
+            <Icon name="close" />
+          </button>
+        </header>
+        <div className="preview-content">
+          {preview.chunks.map((chunk, index) => (
+            <article key={`${chunk.page}-${index}`}>
+              <span>Page {chunk.page}</span>
+              <p>{chunk.content}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function DocumentsView({ user, documents, onRefresh, onToast }) {
+  const [file, setFile] = useState(null)
+  const [title, setTitle] = useState('')
+  const [classification, setClassification] = useState('interne')
+  const [allowedRoles, setAllowedRoles] = useState(['admin', 'document_manager', 'user'])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState('all')
+  const [preview, setPreview] = useState(null)
+  const canManage = user.role === 'admin' || user.role === 'document_manager'
+  const filteredDocuments = useMemo(
+    () =>
+      documents.filter(
+        (document) =>
+          (filter === 'all' || document.classification === filter) &&
+          `${document.title} ${document.filename}`.toLowerCase().includes(query.toLowerCase()),
+      ),
+    [documents, filter, query],
+  )
+
+  function toggleRole(role) {
+    setAllowedRoles((current) => (current.includes(role) ? current.filter((value) => value !== role) : [...current, role]))
+  }
+
+  async function submit(event) {
+    event.preventDefault()
+    if (!file) return setError('Sélectionnez un document.')
+    if (!allowedRoles.length) return setError('Choisissez au moins un rôle autorisé.')
+    setBusy(true)
+    setError('')
+    const form = new FormData()
+    form.append('file', file)
+    form.append('title', title || file.name.replace(/\.[^.]+$/, ''))
+    form.append('classification', classification)
+    form.append('allowed_roles', allowedRoles.join(','))
+    try {
+      const uploaded = await request('/documents/upload', { method: 'POST', body: form })
+      setFile(null)
+      setTitle('')
+      await onRefresh()
+      onToast(`« ${uploaded.title} » importé et indexé (${uploaded.chunks_indexed} extraits).`, 'success')
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function showPreview(id) {
+    try {
+      setPreview(await request(`/documents/${id}/preview`))
+    } catch (requestError) {
+      onToast(requestError.message, 'error')
+    }
+  }
+
+  async function removeDocument(id, name) {
+    if (!window.confirm('Supprimer ce document et son index local ?')) return
+    try {
+      await request(`/documents/${id}`, { method: 'DELETE' })
+      await onRefresh()
+      onToast(`« ${name} » supprimé.`, 'success')
+    } catch (requestError) {
+      onToast(requestError.message, 'error')
+    }
+  }
+
+  return (
+    <section className="workspace">
+      <div className="workspace-head">
+        <div>
+          <p className="overline">BASE DOCUMENTAIRE</p>
+          <h1>Documents et droits d'accès</h1>
+          <p>Les autorisations sont appliquées avant la recherche sémantique.</p>
+        </div>
+        <span className="count-badge">
+          {documents.length} indexé{documents.length > 1 ? 's' : ''}
+        </span>
+      </div>
+      {canManage && (
+        <form className="upload-card" onSubmit={submit}>
+          <div className="upload-header">
+            <div>
+              <h3>Importer un document</h3>
+              <p>
+                Le texte est conservé localement, découpé puis indexé par <strong>embeddinggemma</strong>.
+              </p>
+            </div>
+            <span>PDF · DOCX · TXT · MD</span>
+          </div>
+          <div className="form-grid">
+            <label>
+              Titre du document
+              <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Ex. Rapport trimestriel" />
+            </label>
+            <label>
+              Classification
+              <select value={classification} onChange={(event) => setClassification(event.target.value)}>
+                <option value="interne">Interne</option>
+                <option value="direction">Direction</option>
+                <option value="confidentiel">Confidentiel</option>
+              </select>
+            </label>
+            <label className="file-input">
+              Fichier
+              <input type="file" accept=".pdf,.docx,.txt,.md" onChange={(event) => setFile(event.target.files[0] ?? null)} />
+              {file ? <span>{file.name}</span> : <span>Choisir un fichier</span>}
+            </label>
+          </div>
+          <fieldset>
+            <legend>Rôles autorisés</legend>
+            {ROLES.map((role) => (
+              <label className="role-check" key={role}>
+                <input type="checkbox" checked={allowedRoles.includes(role)} onChange={() => toggleRole(role)} />
+                {role}
+              </label>
+            ))}
+          </fieldset>
+          {error && <p className="error">{error}</p>}
+          <button className="primary" disabled={busy}>
+            <Icon name="upload" /> {busy ? 'Indexation locale…' : 'Importer et indexer'}
+          </button>
+        </form>
+      )}
+      <div className="document-toolbar">
+        <div className="search-field">
+          <Icon name="search" />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Rechercher un titre ou fichier…" />
+        </div>
+        <select value={filter} onChange={(event) => setFilter(event.target.value)}>
+          <option value="all">Toutes classifications</option>
+          {CLASSIFICATIONS.map((value) => (
+            <option key={value} value={value}>
+              {value[0].toUpperCase() + value.slice(1)}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="document-list">
+        {filteredDocuments.length === 0 ? (
+          <div className="empty-state compact">
+            <h3>{documents.length ? 'Aucun résultat' : 'La base est vide'}</h3>
+            <p>
+              {documents.length
+                ? 'Modifiez votre recherche ou votre filtre.'
+                : 'Importez 10 à 50 documents de démonstration non sensibles pour réaliser le POC ANSI.'}
+            </p>
+          </div>
+        ) : (
+          filteredDocuments.map((document) => (
+            <article className="document-card" key={document.id}>
+              <div className="document-symbol">
+                <Icon name="doc-text" />
+              </div>
+              <div className="document-meta">
+                <h3>{document.title}</h3>
+                <p>{document.filename}</p>
+                <div className="tags">
+                  <span className={`tag-classification ${document.classification}`}>{document.classification}</span>
+                  {document.allowed_roles.map((role) => (
+                    <span key={role}>{role}</span>
+                  ))}
+                </div>
+              </div>
+              <button className="text-button" onClick={() => showPreview(document.id)}>
+                <Icon name="eye" /> Aperçu
+              </button>
+              {user.role === 'admin' && (
+                <button className="icon-button" title="Supprimer" onClick={() => removeDocument(document.id, document.title)}>
+                  <Icon name="trash" />
+                </button>
+              )}
+            </article>
+          ))
+        )}
+      </div>
+      <DocumentPreview preview={preview} onClose={() => setPreview(null)} />
+    </section>
+  )
+}
+
+function UsersView({ user, onToast }) {
+  const [users, setUsers] = useState([])
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [role, setRole] = useState('user')
+  const [error, setError] = useState('')
+
+  async function loadUsers() {
+    setUsers(await request('/admin/users'))
+  }
+
+  useEffect(() => {
+    if (user.role === 'admin') loadUsers().catch((requestError) => setError(requestError.message))
+  }, [user.role])
+
+  if (user.role !== 'admin') {
+    return (
+      <section className="workspace">
+        <div className="empty-state">
+          <h3>Accès administrateur requis</h3>
+          <p>La gestion des comptes est réservée aux administrateurs.</p>
+        </div>
+      </section>
+    )
+  }
+
+  async function submit(event) {
+    event.preventDefault()
+    setError('')
+    try {
+      await request('/admin/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, role }),
+      })
+      setUsername('')
+      setPassword('')
+      setRole('user')
+      await loadUsers()
+      onToast(`Compte « ${username} » créé.`, 'success')
+    } catch (requestError) {
+      setError(requestError.message)
+    }
+  }
+
+  return (
+    <section className="workspace">
+      <div className="workspace-head">
+        <div>
+          <p className="overline">ADMINISTRATION</p>
+          <h1>Utilisateurs et rôles</h1>
+          <p>Les rôles gouvernent l'accès aux documents et aux fonctions d'administration.</p>
+        </div>
+      </div>
+      <div className="admin-grid">
+        <form className="upload-card" onSubmit={submit}>
+          <h3>Créer un compte</h3>
+          <label>
+            Identifiant
+            <input value={username} onChange={(event) => setUsername(event.target.value)} minLength="3" required />
+          </label>
+          <label>
+            Mot de passe initial
+            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength="12" required />
+          </label>
+          <label>
+            Rôle
+            <select value={role} onChange={(event) => setRole(event.target.value)}>
+              {ROLES.map((value) => (
+                <option key={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+          {error && <p className="error">{error}</p>}
+          <button className="primary">Créer le compte</button>
+        </form>
+        <div className="user-list">
+          {users.map((account) => (
+            <article key={account.id}>
+              <div className="avatar small">{account.username.slice(0, 1).toUpperCase()}</div>
+              <div className="user-name">
+                <strong>{account.username}</strong>
+                <span className={`role-pill ${account.role}`}>{account.role}</span>
+              </div>
+              <small className={account.is_active ? 'active-state' : ''}>{account.is_active ? 'Actif' : 'Inactif'}</small>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function App() {
+  const [user, setUser] = useState(null)
+  const [documents, setDocuments] = useState([])
+  const [system, setSystem] = useState(null)
+  const [conversations, setConversations] = useState([])
+  const [activeConversation, setActiveConversation] = useState(null)
+  const [messages, setMessages] = useState([])
+  const [tab, setTab] = useState('overview')
+  const [loadError, setLoadError] = useState('')
+  const [theme, toggleTheme] = useTheme()
+  const { toasts, push: pushToast } = useToasts()
+
+  async function refreshDocuments() {
+    setDocuments(await request('/documents'))
+  }
+
+  async function initialize(currentUser) {
+    setUser(currentUser)
+    try {
+      const [loadedDocuments, loadedSystem, loadedConversations] = await Promise.all([
+        request('/documents'),
+        request('/system/status'),
+        request('/conversations'),
+      ])
+      setDocuments(loadedDocuments)
+      setSystem(loadedSystem)
+      setConversations(loadedConversations)
+    } catch (requestError) {
+      setLoadError(requestError.message)
+    }
+  }
+
+  async function selectConversation(id) {
+    const response = await request(`/conversations/${id}/messages`)
+    setActiveConversation(response.conversation)
+    setMessages(response.messages)
+    setTab('chat')
+  }
+
+  async function newConversation() {
+    const conversation = await request('/conversations', { method: 'POST' })
+    setConversations((current) => [conversation, ...current])
+    setActiveConversation(conversation)
+    setMessages([])
+    setTab('chat')
+  }
+
+  async function renameConversation(id, title) {
+    try {
+      const updated = await request(`/conversations/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      })
+      setConversations((current) => current.map((item) => (item.id === id ? updated : item)))
+      if (activeConversation?.id === id) setActiveConversation(updated)
+    } catch (requestError) {
+      pushToast(requestError.message, 'error')
+    }
+  }
+
+  async function deleteConversation(id) {
+    if (!window.confirm('Supprimer cette conversation locale ?')) return
+    await request(`/conversations/${id}`, { method: 'DELETE' })
+    setConversations((current) => current.filter((conversation) => conversation.id !== id))
+    if (activeConversation?.id === id) {
+      setActiveConversation(null)
+      setMessages([])
+    }
+    pushToast('Conversation supprimée.', 'success')
+  }
+
+  async function sendMessage(question) {
+    const response = await request('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: question, conversation_id: activeConversation?.id ?? null }),
+    })
+    const conversation = response.conversation
+    setActiveConversation(conversation)
+    setMessages((current) => [
+      ...current,
+      { role: 'user', content: question },
+      { role: 'assistant', content: response.answer, sources: response.sources },
+    ])
+    setConversations((current) => [conversation, ...current.filter((item) => item.id !== conversation.id)])
+  }
+
+  useEffect(() => {
+    request('/auth/me').then(initialize).catch(() => undefined)
+  }, [])
+
+  if (!user) return <Login onLogin={initialize} theme={theme} onToggleTheme={toggleTheme} />
+
+  async function logout() {
+    await request('/auth/logout', { method: 'POST' })
+    setUser(null)
+    setDocuments([])
+    setConversations([])
+    setActiveConversation(null)
+    setMessages([])
+    setTab('overview')
+  }
+
+  const tabs = [
+    { id: 'overview', label: "Vue d'ensemble", icon: 'grid' },
+    { id: 'chat', label: 'Assistant', icon: 'chat' },
+    { id: 'documents', label: 'Documents', icon: 'folder' },
+    { id: 'users', label: 'Utilisateurs', icon: 'users', admin: true },
+  ]
+
+  return (
+    <main className="app-shell">
+      <aside className="main-sidebar">
+        <div className="side-brand">
+          <div className="brand-mark">A</div>
+          <div>
+            <strong>ANSI</strong>
+            <span>Assistant local</span>
+          </div>
+        </div>
+        <nav>
+          {tabs
+            .filter((item) => !item.admin || user.role === 'admin')
+            .map((item) => (
+              <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}>
+                <Icon name={item.icon} />
+                {item.label}
+              </button>
+            ))}
+        </nav>
+        <div className="side-footer">
+          <button className="theme-toggle" onClick={toggleTheme} title="Changer de thème">
+            <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
+            {theme === 'dark' ? 'Thème clair' : 'Thème sombre'}
+          </button>
+          <div className="account">
+            <div className="avatar">{user.username.slice(0, 1).toUpperCase()}</div>
+            <div>
+              <strong>{user.username}</strong>
+              <span>{user.role}</span>
+            </div>
+          </div>
+          <button className="logout" onClick={logout}>
+            <Icon name="logout" /> Déconnexion
+          </button>
+        </div>
+      </aside>
+      <section className="main-content">
+        {loadError && <div className="notice">{loadError}</div>}
+        {tab === 'overview' && <Overview documents={documents} system={system} user={user} onNavigate={setTab} />}
+        {tab === 'chat' && (
+          <ChatView
+            documents={documents}
+            system={system}
+            conversations={conversations}
+            activeConversation={activeConversation}
+            messages={messages}
+            onNewConversation={newConversation}
+            onSelectConversation={selectConversation}
+            onRenameConversation={renameConversation}
+            onDeleteConversation={deleteConversation}
+            onSend={sendMessage}
+            onToast={pushToast}
+          />
+        )}
+        {tab === 'documents' && (
+          <DocumentsView user={user} documents={documents} onRefresh={refreshDocuments} onToast={pushToast} />
+        )}
+        {tab === 'users' && <UsersView user={user} onToast={pushToast} />}
+      </section>
+      <ToastStack toasts={toasts} />
+    </main>
+  )
+}
+
+export default App

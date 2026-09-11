@@ -1,0 +1,1 @@
+À ce stade, c’est un POC ANSI solide. Les prochaines étapes de production restent : OCR local pour PDF scannés, PostgreSQL + pgvector, SSO/LDAP ANSI, audit complet, Docker, sauvegardes, supervision et, ensuite seulement, LangGraph pour orchestrer plusieurs parcours métier.

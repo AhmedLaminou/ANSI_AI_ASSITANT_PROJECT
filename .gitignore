@@ -1,0 +1,25 @@
+# Secrets and local configuration
+.env
+backend/.env
+credentials.txt
+*.credentials.txt
+
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+*.py[cod]
+
+# Local application data and approved test documents
+backend/data/
+data/documents-test/*
+!data/documents-test/.gitkeep
+
+# JavaScript
+frontend/node_modules/
+frontend/dist/
+
+# Editors and operating system
+.vscode/
+.idea/
+Thumbs.db
