@@ -86,7 +86,29 @@ En cas d'erreur, la transaction est annulée et le fichier écrit sur disque est
 | 7. Génération | `POST /api/chat` vers Ollama | `num_ctx=4096`, `temperature=0.15`, `think=false`, `keep_alive=10m` |
 | 8. Persistance | question, réponse, sources JSON, événement d'audit | SQLite |
 
-### 2.3 Le prompt système
+### 2.3 Streaming de la réponse
+
+`POST /chat` renvoie la réponse complète en une fois. `POST /chat/stream` renvoie un flux **NDJSON**
+(une ligne JSON par événement), consommé par l'interface :
+
+| Événement | Contenu | Rôle |
+|---|---|---|
+| `meta` | `sources`, `reasoning_expected` | Les sources sont connues **avant** la génération : elles s'affichent immédiatement |
+| `thinking` | `chars` | Le modèle raisonne ; le texte n'est pas transmis, seul le volume l'est |
+| `answer_start` | — | `</think>` atteint : tout ce qui précède est écarté |
+| `token` | `value` | Fragment de la réponse finale |
+| `done` | `conversation` | Réponse enregistrée ; titre de conversation à jour |
+| `error` | `detail` | Panne du modèle en cours de flux |
+
+Le raisonnement n'est **ni affiché, ni enregistré** : il est absorbé côté serveur. Si le modèle ne
+produit pas de bloc de raisonnement (`OLLAMA_CHAT_REASONING=false`), les jetons sont diffusés
+directement. Si le marqueur n'apparaît jamais alors qu'il était attendu, le contenu accumulé est
+traité comme la réponse — le flux ne peut pas se terminer vide.
+
+La persistance se fait dans une session base de données propre au générateur : celle de la requête
+est déjà fermée quand le flux se termine.
+
+### 2.4 Le prompt système
 
 ```text
 Tu es l'assistant documentaire interne de l'ANSI. Réponds uniquement à partir des extraits fournis.
@@ -105,7 +127,7 @@ prompt via un document piégé) et **refus plutôt qu'invention**.
 | Table | Rôle | Points notables |
 |---|---|---|
 | `users` | comptes | `role` ∈ {`admin`, `document_manager`, `user`}, `is_active`, hash Argon2 |
-| `documents` | métadonnées | `classification`, `allowed_roles` (chaîne CSV), `created_by` |
+| `documents` | métadonnées | `classification`, `allowed_roles` (chaîne CSV), `created_by`, `version`, `is_current` |
 | `document_chunks` | index vectoriel | `content`, `page_number`, `embedding` **stocké en texte JSON** |
 | `conversations` | fils de discussion | rattachées à `user_id` |
 | `chat_messages` | messages | `role`, `content`, `sources` (JSON) |
@@ -127,6 +149,9 @@ prompt via un document piégé) et **refus plutôt qu'invention**.
 | Aucune API IA externe | aucune dépendance cloud dans le chemin d'exécution |
 | Secrets hors dépôt | `.env`, `credentials.txt`, `backend/data/` ignorés par git |
 | Rendu de la réponse | l'interface construit des éléments React, jamais d'injection HTML brute |
+| Cycle de vie des comptes | changement de rôle, désactivation, réinitialisation de mot de passe ; un administrateur ne peut ni se retirer ses propres droits ni supprimer le dernier administrateur actif |
+| Limitation de débit | `CHAT_RATE_LIMIT_PER_MINUTE` par compte, réponse `429` au-delà |
+| Rétention | purge par ancienneté (`CONVERSATION_RETENTION_DAYS`), au démarrage et en commande planifiable |
 
 ---
 
@@ -228,14 +253,23 @@ correspondance groupes annuaire → rôles documentaires).
 
 ### 5.6 Journalisation, rétention, audit
 
-**État : partiel.** Un journal d'événements existe (`audit_events`), mais :
+**État : le mécanisme existe, la politique reste à arbitrer.**
 
-- il n'y a **aucune expiration** des conversations : elles s'accumulent indéfiniment ;
-- le contenu des questions est stocké en clair dans la base ;
-- il n'existe pas de politique de redaction des logs applicatifs.
+Ce qui est en place :
 
-À définir avant toute donnée réelle : durée de conservation, purge automatique, qui peut consulter
-le journal, et ce qui ne doit jamais être journalisé.
+- journal d'événements (`audit_events`) : import, suppression, question répondue, création et
+  modification de compte, réinitialisation de mot de passe ;
+- purge par ancienneté pilotée par `CONVERSATION_RETENTION_DAYS`, exécutée au démarrage de l'API et
+  disponible en commande planifiable : `python -m app.purge_conversations`.
+
+Ce qui reste à décider — et qui **ne peut pas l'être par défaut** :
+
+- la durée de conservation elle-même (`CONVERSATION_RETENTION_DAYS=0` conserve indéfiniment) ;
+- qui peut consulter le journal d'audit ;
+- ce qui ne doit jamais être journalisé (le contenu des questions est aujourd'hui stocké en clair) ;
+- la politique de redaction des logs applicatifs.
+
+C'est le dernier point bloquant avant de traiter des documents réels.
 
 ### 5.7 Déploiement
 
@@ -247,17 +281,66 @@ vers l'environnement de production isolé.
 
 ### 5.8 Évaluation de la qualité et choix du modèle
 
-**État : non implémenté.** `qwen3:4b` a été retenu pour démarrer, sans comparaison chiffrée.
-Il manque un jeu de 10 à 50 documents non sensibles avec questions et réponses attendues, permettant
-de mesurer : taux de réponses correctement sourcées, taux de refus justifiés, taux d'hallucination,
-temps jusqu'au premier token, tokens/seconde, RAM/VRAM. Sans ce jeu d'évaluation, tout changement de
-modèle, de découpage ou de seuil relève de l'intuition.
+**État : le harnais existe, le benchmark comparatif reste à faire.**
+
+`tests/evaluate.py` indexe le corpus de `tests/evaluation/dataset.json` (6 documents fictifs,
+14 questions dont 2 sans réponse dans le corpus) puis mesure :
+
+- **exactitude** — la réponse contient les éléments attendus ;
+- **sources correctes** — le document attendu figure parmi les sources citées ;
+- **refus corrects** — sur une question sans réponse, l'assistant refuse au lieu d'inventer ;
+- **latence** médiane et maximale.
+
+```powershell
+.\.venv\Scripts\python.exe -m tests.evaluate
+.\.venv\Scripts\python.exe -m tests.evaluate --model qwen3:0.6b
+```
+
+Le jeu est volontairement petit et factuel (dates, montants, durées) : il détecte les régressions,
+il ne mesure pas la qualité rédactionnelle. À étoffer avec de vrais documents ANSI anonymisés.
+
+#### Relevé de référence (2026-09-14)
+
+| Mesure | `qwen3:4b` | `qwen3:0.6b` |
+|---|---|---|
+| Exactitude | **12/12** | 2/12 |
+| Sources correctes | 12/12 | 12/12 |
+| Refus corrects | 2/2 | 2/2 |
+| Latence médiane | 21,0 s | **0,8 s** |
+| Latence maximale | 120,3 s | **1,1 s** |
+
+Trois enseignements :
+
+**1. La recherche documentaire n'est pas le facteur limitant.** Les deux modèles obtiennent
+**12/12 sur les sources** : le bon document est retrouvé et cité dans tous les cas. Ce qui les sépare
+est uniquement la capacité à *extraire* la réponse du contexte fourni. Optimiser le RAG n'améliorerait
+donc pas la qualité aujourd'hui — c'est le modèle de génération qui décide.
+
+**2. Un petit modèle ne suffit pas, mais il échoue proprement.** `qwen3:0.6b` est 25 fois plus
+rapide et pratiquement inutilisable : il répond « l'information n'est pas présente » alors que les
+extraits la contiennent. Point rassurant pour l'architecture : il **refuse au lieu d'inventer**, y
+compris sur les deux questions sans réponse. Les garde-fous tiennent même avec un modèle faible.
+
+**3. La latence de `qwen3:4b` vient du raisonnement, pas de la recherche.** Le compteur affiché
+pendant le streaming dépasse **1 800 caractères** de raisonnement généré puis jeté pour une question
+à deux faits.
+
+Piste à tester : un modèle de taille intermédiaire (3B–8B) **sans phase de raisonnement**, qui
+devrait conserver la capacité d'extraction de `qwen3:4b` sans en payer le coût. C'est le prochain
+essai à mener, avec un relevé RAM/VRAM en parallèle.
+
+Attention à la variance : à `temperature 0.15` et sur 12 questions, un écart d'un ou deux points
+entre deux exécutions est du bruit, pas une régression.
 
 ### 5.9 Robustesse en charge
 
-**État : non implémenté.** Ni limitation de débit, ni file d'attente, ni suivi des requêtes
-concurrentes. Ollama traite les requêtes séquentiellement : à plusieurs utilisateurs simultanés,
-la latence se dégrade rapidement. À mesurer avant tout élargissement.
+**État : garde-fou en place, tests de charge à faire.**
+
+Une limitation de débit par compte est active (`CHAT_RATE_LIMIT_PER_MINUTE`, 12 par défaut) : elle
+renvoie `429` au-delà du seuil. Elle protège d'un usage emballé, pas d'une charge légitime —
+Ollama traite les requêtes séquentiellement, donc la latence se dégrade dès quelques utilisateurs
+simultanés. Le compteur vit dans le processus (§7.9). Il manque : file d'attente, mesure du nombre
+d'utilisateurs simultanés soutenables, et tests de charge.
 
 ---
 
@@ -268,22 +351,30 @@ Correspondance avec les phases du document d'architecture (§34).
 | Phase | Élément | État |
 |---|---|---|
 | 1 — Faisabilité | Ollama + modèles locaux, inférence hors ligne | ✅ Fait |
-| 1 | Benchmark comparatif de modèles, mesures RAM/VRAM/latence | ❌ À faire |
+| 1 | Harnais d'évaluation reproductible | ✅ Fait (§5.8) |
+| 1 | Benchmark comparatif de modèles, mesures RAM/VRAM | ❌ À faire |
 | 2 — RAG | Extraction, découpage, embeddings locaux | ✅ Fait |
 | 2 | Index vectoriel | ⚠️ Fait en SQLite/JSON — à migrer vers pgvector |
 | 2 | Réponses sourcées + refus si source insuffisante | ✅ Fait |
+| 2 | Réponses en streaming | ✅ Fait |
+| 2 | Versionnement des documents | ✅ Fait |
 | 2 | OCR des PDF scannés | ❌ À faire |
-| 2 | Jeu d'évaluation qualité | ❌ À faire |
 | 3 — Agent | LangGraph, routage, outils métier | ❌ À faire (après le premier outil) |
 | 4 — Sécurité | Authentification, rôles, ACL documentaire avant recherche | ✅ Fait |
 | 4 | Isolation instruction/données (anti-injection) | ✅ Fait |
+| 4 | Cycle de vie des comptes (rôle, désactivation, mot de passe) | ✅ Fait |
 | 4 | Journal d'audit | ⚠️ Basique |
+| 4 | Limitation de débit | ✅ Fait (§5.9) |
+| 4 | Mécanisme de purge de l'historique | ✅ Fait (§5.6) |
+| 4 | **Politique** de rétention et de journalisation | ❌ À arbitrer — **bloquant pour la production** |
 | 4 | SSO / LDAP | ❌ À faire |
-| 4 | Politique de rétention et de journalisation | ❌ À faire — **bloquant pour la production** |
-| 4 | Rate limiting | ❌ À faire |
 | 5 — Production | PostgreSQL, Docker, reverse proxy, supervision, sauvegardes | ❌ À faire |
 | 5 | Procédure de mise à jour hors ligne | ❌ À faire |
 | 5 | Tests de charge et de sécurité | ❌ À faire |
+
+Couverture de tests : `tests/test_units.py` (23 tests unitaires, sans Ollama ni base) et
+`tests/smoke_rag.py` (bout en bout : import, RAG, streaming, versionnement, cycle de vie des comptes,
+cloisonnement par rôle).
 
 ---
 
@@ -293,33 +384,38 @@ Correspondance avec les phases du document d'architecture (§34).
 2. **Recherche O(n) en Python** — balayage de tous les extraits autorisés (§5.2).
 3. **`allowed_roles` en chaîne CSV** — pas de contrainte d'intégrité ; deviendrait un tableau ou une
    table de jointure en PostgreSQL.
-4. **Pas de réponse en streaming** — l'utilisateur attend la réponse complète. Ollama sait streamer
-   (`stream: true`) ; c'est l'amélioration de confort la plus visible, pour un coût faible.
-5. **ACL au niveau du document uniquement** — pas de restriction par section ou par page.
-6. **Pas de pagination** — `GET /documents` renvoie tout.
-7. **Pas de gestion du cycle de vie des comptes** — création seulement : ni désactivation, ni
-   changement de rôle, ni réinitialisation de mot de passe depuis l'interface.
-8. **Pas de versionnement des documents** — réimporter un document corrigé crée un doublon.
-9. **Mémoire conversationnelle à fenêtre fixe** — les 6 derniers messages, sans résumé des échanges
+4. **ACL au niveau du document uniquement** — pas de restriction par section ou par page.
+5. **Pas de pagination** — `GET /documents` renvoie tout. Sans effet à l'échelle actuelle, bloquant
+   à quelques centaines de documents.
+6. **Mémoire conversationnelle à fenêtre fixe** — les 6 derniers messages, sans résumé des échanges
    plus anciens.
-10. **Aucun test automatisé hors `smoke_rag.py`** — pas de tests unitaires sur le découpage, les
-    seuils ou le contrôle d'accès.
-11. **Raisonnement du modèle émis malgré `think: false`** — `qwen3:4b` produit son raisonnement
-    interne dans le champ `content`, terminé par `</think>`, avant la réponse finale. Le backend le
-    retire (`extract_answer()`), mais ces jetons sont **générés puis jetés** : ils allongent
-    inutilement le temps de réponse. À réévaluer lors du benchmark de modèles (§5.8) — un modèle sans
-    phase de raisonnement peut être nettement plus rapide à qualité équivalente sur ce cas d'usage.
+7. **Raisonnement du modèle émis malgré `think: false`** — `qwen3:4b` produit son raisonnement
+   interne dans le champ `content`, terminé par `</think>`, avant la réponse finale. Il est retiré
+   (`extract_answer()`) et masqué pendant le streaming, mais ces jetons sont **générés puis jetés** :
+   ils dominent le temps de réponse. C'est aujourd'hui le premier levier de latence — voir §5.8.
+8. **Migration de schéma artisanale** — `ensure_schema()` ajoute les colonnes manquantes en SQLite.
+   Suffisant pour le POC, à remplacer par Alembic avec le passage à PostgreSQL.
+9. **Limitation de débit en mémoire du processus** — remise à zéro au redémarrage et non partagée
+   entre plusieurs instances. Correct pour un processus unique, à déporter (Redis ou équivalent)
+   le jour où l'API est répliquée.
 
 ---
 
 ## 8. Ordre de travail recommandé
 
-1. **Jeu d'évaluation** (10–50 documents + questions/réponses attendues) — sans lui, aucune des
-   améliorations suivantes n'est mesurable.
-2. **Réponses en streaming** — fort gain perçu, coût faible.
-3. **Politique de rétention et de journalisation** — décision de gouvernance, pas de code ; bloquante
-   pour toute donnée réelle.
-4. **PostgreSQL + pgvector** — lève le plafond de passage à l'échelle (§5.2).
-5. **OCR local** — débloque le fonds documentaire scanné.
-6. **Premier outil métier + LangGraph** — introduits ensemble, quand un second parcours existe vraiment.
-7. **SSO / LDAP**, puis **conteneurisation, supervision, sauvegardes** — chantier de mise en production.
+Fait : harnais d'évaluation, streaming, versionnement, cycle de vie des comptes, limitation de débit,
+mécanisme de purge, tests unitaires et d'intégration.
+
+Reste, dans cet ordre :
+
+1. **Arbitrer la politique de rétention et de journalisation** — décision de gouvernance, pas de
+   code ; le mécanisme attend sa valeur. Bloquant pour toute donnée réelle.
+2. **Benchmark de modèles sur le harnais** (§5.8) — en particulier un modèle sans raisonnement : les
+   jetons de raisonnement dominent aujourd'hui la latence (§7.7).
+3. **OCR local** — débloque le fonds documentaire scanné ; nécessite d'installer Tesseract.
+4. **PostgreSQL + pgvector** — lève le plafond de passage à l'échelle (§5.2) ; nécessite l'extension
+   `pgvector`, absente d'une installation PostgreSQL standard sous Windows.
+5. **Premier outil métier + LangGraph** — introduits ensemble, quand un second parcours existe
+   vraiment.
+6. **SSO / LDAP**, puis **conteneurisation, supervision, sauvegardes** — chantier de mise en
+   production.

@@ -19,7 +19,11 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_chat_model: str = "qwen3:4b"
     ollama_embedding_model: str = "embeddinggemma"
+    # qwen3 emits reasoning before its answer; the stream hides it until </think>.
+    ollama_chat_reasoning: bool = True
     document_max_upload_mb: int = 20
+    conversation_retention_days: int = 0  # 0 disables automatic purging
+    chat_rate_limit_per_minute: int = 12
 
     model_config = SettingsConfigDict(env_file=PROJECT_DIR / ".env", env_file_encoding="utf-8", extra="ignore")
 

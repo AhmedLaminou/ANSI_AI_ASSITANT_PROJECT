@@ -28,6 +28,10 @@ que son rôle autorise.
 - Embeddings locaux avec `embeddinggemma` (768 dimensions), recherche par similarité cosinus.
 - Réponses générées par `qwen3:4b` avec citation du document et de la page (`[S1]`, `[S2]`…).
 - Refus explicite lorsqu'aucune source pertinente n'est trouvée, au lieu d'une réponse inventée.
+- **Réponses en streaming** : le texte s'affiche au fil de la génération ; la phase de raisonnement
+  du modèle est masquée et n'est jamais enregistrée.
+- **Versionnement** : réimporter un fichier de même nom crée une version et remplace la précédente,
+  qui n'est plus interrogée mais reste consultable.
 - Recherche, filtrage par classification et aperçu autorisé des documents indexés.
 
 ### Sécurité et contrôle d'accès
@@ -36,7 +40,11 @@ que son rôle autorise.
 - Rôles `admin`, `document_manager` et `user` ; chaque document porte la liste des rôles autorisés.
 - Filtrage des documents **avant** la recherche sémantique, jamais par simple consigne au modèle.
 - Extraits présentés au modèle comme des données non fiables (défense contre l'injection de prompt).
-- Journal des actions : import, suppression, question répondue, création de compte.
+- **Cycle de vie des comptes** : changement de rôle, désactivation/réactivation, réinitialisation de
+  mot de passe — avec garde-fous contre le verrouillage du dernier administrateur.
+- **Limitation de débit** par compte (`CHAT_RATE_LIMIT_PER_MINUTE`).
+- **Purge de l'historique** par ancienneté (`CONVERSATION_RETENTION_DAYS`, désactivée par défaut).
+- Journal des actions : import, suppression, question répondue, gestion des comptes.
 - Aucun accès direct du navigateur à Ollama ; aucune API IA externe.
 
 ### Espace de travail
@@ -55,8 +63,20 @@ que son rôle autorise.
 4. Dans une seconde fenêtre : `cd frontend; npm run dev`.
 5. Ouvrir `http://localhost:5173` et se connecter.
 
-Test de bout en bout (crée puis supprime ses propres données) :
-`cd backend; .\.venv\Scripts\python.exe -m tests.smoke_rag`
+### Tests et évaluation
+
+Une seule fois : `cd backend; .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt`
+
+Puis, depuis `backend`, avec Ollama démarré :
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_units.py -q   # logique pure, rapide, sans Ollama
+.\.venv\Scripts\python.exe -m tests.smoke_rag                 # bout en bout, crée et supprime ses données
+.\.venv\Scripts\python.exe -m tests.evaluate                  # qualité des réponses (exactitude, sources, refus, latence)
+.\.venv\Scripts\python.exe -m tests.evaluate --model qwen3:0.6b   # comparer un autre modèle
+```
+
+`tests.evaluate` est le garde-fou à lancer après tout changement de modèle, de découpage ou de seuil.
 
 Utiliser seulement des documents non sensibles ou anonymisés. Les PDF scannés ne sont pas encore pris
 en charge : une étape OCR locale sera ajoutée séparément.
@@ -77,10 +97,11 @@ Déplacer les modèles ne casse donc pas l'application.
 
 Détail et justification dans [docs/ARCHITECTURE_TECHNIQUE.md](docs/ARCHITECTURE_TECHNIQUE.md) §8.
 
-1. Constituer un jeu d'évaluation (10 à 50 documents + questions/réponses attendues).
-2. Ajouter les réponses en streaming.
-3. Définir la politique de rétention et de journalisation — bloquant avant toute donnée réelle.
-4. Migrer vers PostgreSQL + pgvector pour le passage à l'échelle.
-5. Ajouter l'OCR local pour les PDF scannés.
-6. Introduire LangGraph en même temps que le premier outil métier, à privilèges minimaux.
-7. Intégrer le SSO/LDAP de l'ANSI, puis conteneurisation, supervision et sauvegardes.
+1. **Arbitrer la politique de rétention et de journalisation** — le mécanisme existe, la durée reste
+   à décider. Bloquant avant toute donnée réelle.
+2. Comparer plusieurs modèles avec `tests.evaluate`, en particulier un modèle sans raisonnement :
+   les jetons de raisonnement dominent aujourd'hui la latence.
+3. Ajouter l'OCR local pour les PDF scannés (nécessite Tesseract).
+4. Migrer vers PostgreSQL + pgvector (nécessite l'extension `pgvector`).
+5. Introduire LangGraph en même temps que le premier outil métier, à privilèges minimaux.
+6. Intégrer le SSO/LDAP de l'ANSI, puis conteneurisation, supervision et sauvegardes.

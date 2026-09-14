@@ -113,10 +113,12 @@ en production. Les limites assumées aujourd'hui :
 - Pas d'OCR : un PDF composé uniquement d'images scannées est refusé à l'import.
 - Base SQLite et recherche vectorielle calculée en Python : correct pour quelques dizaines de
   documents, inadapté à un usage multi-utilisateurs à grande échelle.
-- Pas d'authentification centrale (SSO / LDAP ANSI) : les comptes sont créés à la main.
+- Pas d'authentification centrale (SSO / LDAP ANSI) : les comptes sont créés et gérés à la main
+  depuis l'interface d'administration.
 - Pas d'outils métier : le modèle ne peut interroger aucune base de données applicative.
-- Pas de politique de rétention validée : l'historique des conversations est conservé sans
-  expiration automatique. **C'est un point à arbitrer avant toute mise en production.**
+- Une purge de l'historique par ancienneté existe, mais **la durée de conservation n'est pas
+  arbitrée** : par défaut l'historique est conservé indéfiniment.
+  **C'est le point à trancher avant toute mise en production.**
 - Les réponses doivent rester validées par un agent avant toute décision administrative.
 
 La suite est détaillée dans [ARCHITECTURE_TECHNIQUE.md](ARCHITECTURE_TECHNIQUE.md).
@@ -172,5 +174,9 @@ L'historique d'un utilisateur n'est visible que par lui : chaque conversation es
 compte, et un utilisateur ne peut ni lire ni supprimer celles d'un autre. Une conversation supprimée
 l'est réellement, avec ses messages.
 
-**Rappel de prudence :** tant qu'aucune politique de rétention n'est validée, n'utiliser que des
-documents non sensibles ou anonymisés.
+La purge par ancienneté se règle avec `CONVERSATION_RETENTION_DAYS` : elle s'exécute au démarrage de
+l'API et peut être planifiée (`python -m app.purge_conversations`). Réglée à `0` — la valeur par
+défaut — rien n'est supprimé : la durée doit être **décidée**, pas subie.
+
+**Rappel de prudence :** tant que cette durée n'est pas arbitrée, n'utiliser que des documents non
+sensibles ou anonymisés.

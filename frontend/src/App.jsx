@@ -14,6 +14,35 @@ async function request(path, options = {}) {
   return response.status === 204 ? null : response.json()
 }
 
+/** Reads the NDJSON answer stream and hands each event to onEvent. */
+async function streamChat(body, onEvent) {
+  const response = await fetch(`${API_URL}/chat/stream`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const failure = await response.json().catch(() => ({}))
+    throw new Error(failure.detail ?? 'Une erreur est survenue.')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (line.trim()) onEvent(JSON.parse(line))
+    }
+  }
+  if (buffer.trim()) onEvent(JSON.parse(buffer))
+}
+
 // ---------------------------------------------------------------------------
 // Small building blocks: icons, theme, toasts, rich-text rendering
 // ---------------------------------------------------------------------------
@@ -380,6 +409,7 @@ function ChatView({
   conversations,
   activeConversation,
   messages,
+  streaming,
   onNewConversation,
   onSelectConversation,
   onRenameConversation,
@@ -501,12 +531,35 @@ function ChatView({
                 </article>
               ))
             )}
-            {busy && (
-              <article className="message assistant loading">
-                <p className="message-label">ASSISTANT ANSI</p>
-                <span></span>
-                <span></span>
-                <span></span>
+            {streaming && (
+              <article className="message assistant streaming">
+                <div className="message-head">
+                  <p className="message-label">ASSISTANT ANSI</p>
+                </div>
+                {streaming.phase === 'thinking' ? (
+                  <p className="thinking-line">
+                    <span className="thinking-dots">
+                      <span></span>
+                      <span></span>
+                      <span></span>
+                    </span>
+                    Raisonnement local… {streaming.chars > 0 && `${streaming.chars} caractères analysés`}
+                  </p>
+                ) : (
+                  <div className="message-body">
+                    {renderRichText(streaming.text)}
+                    <span className="stream-caret" />
+                  </div>
+                )}
+                {streaming.sources?.length > 0 && (
+                  <div className="source-list">
+                    {streaming.sources.map((source) => (
+                      <span className="source-pill" key={source.id}>
+                        {source.id} · {source.title} · p. {source.page}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </article>
             )}
           </div>
@@ -582,15 +635,26 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
   const [preview, setPreview] = useState(null)
+  const [showSuperseded, setShowSuperseded] = useState(false)
+  const [withHistory, setWithHistory] = useState(null)
   const canManage = user.role === 'admin' || user.role === 'document_manager'
+
+  useEffect(() => {
+    if (!showSuperseded) return
+    request('/documents?include_superseded=true')
+      .then(setWithHistory)
+      .catch((requestError) => onToast(requestError.message, 'error'))
+  }, [showSuperseded, documents, onToast])
+
+  const listed = showSuperseded ? withHistory ?? documents : documents
   const filteredDocuments = useMemo(
     () =>
-      documents.filter(
+      listed.filter(
         (document) =>
           (filter === 'all' || document.classification === filter) &&
           `${document.title} ${document.filename}`.toLowerCase().includes(query.toLowerCase()),
       ),
-    [documents, filter, query],
+    [listed, filter, query],
   )
 
   function toggleRole(role) {
@@ -710,6 +774,17 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
             </option>
           ))}
         </select>
+        <label className="toggle-field" title="Les versions remplacées ne sont plus interrogées par l'assistant">
+          <input
+            type="checkbox"
+            checked={showSuperseded}
+            onChange={(event) => {
+              setShowSuperseded(event.target.checked)
+              if (!event.target.checked) setWithHistory(null)
+            }}
+          />
+          Versions remplacées
+        </label>
       </div>
       <div className="document-list">
         {filteredDocuments.length === 0 ? (
@@ -723,12 +798,16 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
           </div>
         ) : (
           filteredDocuments.map((document) => (
-            <article className="document-card" key={document.id}>
+            <article className={`document-card ${document.is_current ? '' : 'superseded'}`} key={document.id}>
               <div className="document-symbol">
                 <Icon name="doc-text" />
               </div>
               <div className="document-meta">
-                <h3>{document.title}</h3>
+                <h3>
+                  {document.title}
+                  {document.version > 1 && <span className="version-badge">v{document.version}</span>}
+                  {!document.is_current && <span className="version-badge muted">remplacée</span>}
+                </h3>
                 <p>{document.filename}</p>
                 <div className="tags">
                   <span className={`tag-classification ${document.classification}`}>{document.classification}</span>
@@ -778,6 +857,39 @@ function UsersView({ user, onToast }) {
         </div>
       </section>
     )
+  }
+
+  async function updateAccount(accountId, changes) {
+    try {
+      await request(`/admin/users/${accountId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(changes),
+      })
+      await loadUsers()
+      onToast('Compte mis à jour.', 'success')
+    } catch (requestError) {
+      onToast(requestError.message, 'error')
+    }
+  }
+
+  async function resetPassword(account) {
+    const next = window.prompt(`Nouveau mot de passe pour « ${account.username} » (12 caractères minimum) :`)
+    if (next === null) return
+    if (next.length < 12) {
+      onToast('Le mot de passe doit contenir au moins 12 caractères.', 'error')
+      return
+    }
+    try {
+      await request(`/admin/users/${account.id}/password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: next }),
+      })
+      onToast(`Mot de passe de « ${account.username} » réinitialisé.`, 'success')
+    } catch (requestError) {
+      onToast(requestError.message, 'error')
+    }
   }
 
   async function submit(event) {
@@ -832,11 +944,34 @@ function UsersView({ user, onToast }) {
         </form>
         <div className="user-list">
           {users.map((account) => (
-            <article key={account.id}>
+            <article key={account.id} className={account.is_active ? '' : 'inactive'}>
               <div className="avatar small">{account.username.slice(0, 1).toUpperCase()}</div>
               <div className="user-name">
                 <strong>{account.username}</strong>
                 <span className={`role-pill ${account.role}`}>{account.role}</span>
+                {account.id === user.id && <span className="role-pill self">vous</span>}
+              </div>
+              <div className="user-actions">
+                <select
+                  value={account.role}
+                  aria-label={`Rôle de ${account.username}`}
+                  disabled={account.id === user.id}
+                  onChange={(event) => updateAccount(account.id, { role: event.target.value })}
+                >
+                  {ROLES.map((value) => (
+                    <option key={value}>{value}</option>
+                  ))}
+                </select>
+                <button
+                  className="text-button"
+                  disabled={account.id === user.id}
+                  onClick={() => updateAccount(account.id, { is_active: !account.is_active })}
+                >
+                  {account.is_active ? 'Désactiver' : 'Réactiver'}
+                </button>
+                <button className="text-button" onClick={() => resetPassword(account)}>
+                  Mot de passe
+                </button>
               </div>
               <small className={account.is_active ? 'active-state' : ''}>{account.is_active ? 'Actif' : 'Inactif'}</small>
             </article>
@@ -854,6 +989,7 @@ function App() {
   const [conversations, setConversations] = useState([])
   const [activeConversation, setActiveConversation] = useState(null)
   const [messages, setMessages] = useState([])
+  const [streaming, setStreaming] = useState(null)
   const [tab, setTab] = useState('overview')
   const [loadError, setLoadError] = useState('')
   const [theme, toggleTheme] = useTheme()
@@ -920,19 +1056,39 @@ function App() {
   }
 
   async function sendMessage(question) {
-    const response = await request('/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: question, conversation_id: activeConversation?.id ?? null }),
-    })
-    const conversation = response.conversation
-    setActiveConversation(conversation)
-    setMessages((current) => [
-      ...current,
-      { role: 'user', content: question },
-      { role: 'assistant', content: response.answer, sources: response.sources },
-    ])
-    setConversations((current) => [conversation, ...current.filter((item) => item.id !== conversation.id)])
+    setMessages((current) => [...current, { role: 'user', content: question }])
+    setStreaming({ phase: 'thinking', text: '', sources: [], chars: 0 })
+
+    let answer = ''
+    let sources = []
+    let failure = null
+    try {
+      await streamChat({ message: question, conversation_id: activeConversation?.id ?? null }, (event) => {
+        if (event.type === 'meta') {
+          sources = event.sources
+          setStreaming((current) => ({ ...current, sources, phase: event.reasoning_expected ? 'thinking' : 'answer' }))
+        } else if (event.type === 'thinking') {
+          setStreaming((current) => ({ ...current, chars: event.chars }))
+        } else if (event.type === 'answer_start') {
+          answer = ''
+          setStreaming((current) => ({ ...current, phase: 'answer', text: '' }))
+        } else if (event.type === 'token') {
+          answer += event.value
+          setStreaming((current) => ({ ...current, text: answer }))
+        } else if (event.type === 'error') {
+          failure = event.detail
+        } else if (event.type === 'done') {
+          const conversation = event.conversation
+          setActiveConversation(conversation)
+          setConversations((current) => [conversation, ...current.filter((item) => item.id !== conversation.id)])
+        }
+      })
+    } finally {
+      setStreaming(null)
+    }
+
+    if (failure) throw new Error(failure)
+    setMessages((current) => [...current, { role: 'assistant', content: answer.trim(), sources }])
   }
 
   useEffect(() => {
@@ -948,6 +1104,7 @@ function App() {
     setConversations([])
     setActiveConversation(null)
     setMessages([])
+    setStreaming(null)
     setTab('overview')
   }
 
@@ -1005,6 +1162,7 @@ function App() {
             conversations={conversations}
             activeConversation={activeConversation}
             messages={messages}
+            streaming={streaming}
             onNewConversation={newConversation}
             onSelectConversation={selectConversation}
             onRenameConversation={renameConversation}

@@ -38,6 +38,8 @@ class DocumentRecord(Base):
     allowed_roles: Mapped[str] = mapped_column(String(255), default="admin,document_manager,user")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", index=True)
 
 
 class DocumentChunk(Base):
@@ -81,6 +83,28 @@ class AuditEvent(Base):
     document_id: Mapped[int | None] = mapped_column(ForeignKey("documents.id"), nullable=True, index=True)
     event_type: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+def ensure_schema() -> None:
+    """Additive SQLite migration for POC databases created before a column existed.
+
+    Proper migrations (Alembic) arrive with the PostgreSQL move; until then this keeps
+    an existing local database usable instead of forcing operators to delete it.
+    """
+    expected = {
+        "documents": {
+            "version": "INTEGER NOT NULL DEFAULT 1",
+            "is_current": "BOOLEAN NOT NULL DEFAULT 1",
+        },
+    }
+    with engine.begin() as connection:
+        for table, columns in expected.items():
+            present = {row[1] for row in connection.exec_driver_sql(f"PRAGMA table_info({table})")}
+            if not present:
+                continue
+            for column, definition in columns.items():
+                if column not in present:
+                    connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def get_db():

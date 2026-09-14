@@ -1,0 +1,119 @@
+{
+  "_comment": "Jeu d'évaluation du POC ANSI. Documents fictifs et non sensibles. Chaque question porte sur un document précis; 'expected' liste les éléments qui DOIVENT figurer dans la réponse. Les questions 'refusal: true' n'ont pas de réponse dans le corpus : l'assistant doit refuser au lieu d'inventer.",
+  "documents": [
+    {
+      "filename": "note_cadrage_pilote.txt",
+      "title": "Note de cadrage - projet pilote",
+      "classification": "interne",
+      "allowed_roles": "admin,document_manager,user",
+      "content": "Note de cadrage du projet pilote d'assistant documentaire.\nLe projet demarre le 15 octobre 2026 et se termine le 31 mars 2027.\nLa responsable du projet est Amina Souley, direction des systemes d'information.\nLe budget materiel approuve est de 12 millions FCFA.\nUne evaluation intermediaire est prevue le 30 novembre 2026.\nL'objectif est d'indexer 50 documents internes non sensibles et de mesurer la qualite des reponses."
+    },
+    {
+      "filename": "procedure_acces.txt",
+      "title": "Procedure - gestion des acces",
+      "classification": "direction",
+      "allowed_roles": "admin,document_manager",
+      "content": "Procedure de gestion des acces aux documents classifies.\nToute demande d'acces doit etre validee par le responsable hierarchique du demandeur.\nLe principe du droit d'en connaitre s'applique a toutes les demandes.\nLes acces sont revus chaque trimestre par la direction.\nLa revocation d'un compte doit intervenir dans les 24 heures suivant le depart d'un agent.\nToute exception doit etre documentee et approuvee par le directeur."
+    },
+    {
+      "filename": "politique_mots_de_passe.txt",
+      "title": "Politique de mots de passe",
+      "classification": "interne",
+      "allowed_roles": "admin,document_manager,user",
+      "content": "Politique de mots de passe des agents.\nLa longueur minimale exigee est de 12 caracteres.\nLe renouvellement est obligatoire tous les 90 jours.\nLes six derniers mots de passe ne peuvent pas etre reutilises.\nApres 5 tentatives echouees, le compte est verrouille pendant 30 minutes.\nL'authentification a double facteur est obligatoire pour les comptes administrateurs."
+    },
+    {
+      "filename": "plan_sauvegarde.txt",
+      "title": "Plan de sauvegarde",
+      "classification": "interne",
+      "allowed_roles": "admin,document_manager,user",
+      "content": "Plan de sauvegarde des systemes.\nUne sauvegarde complete est realisee chaque dimanche a 2 heures du matin.\nDes sauvegardes incrementales sont realisees chaque nuit en semaine.\nLa duree de retention des sauvegardes est de 90 jours.\nUn test de restauration est realise chaque trimestre.\nLes sauvegardes sont conservees sur deux sites distincts."
+    },
+    {
+      "filename": "procedure_incident.txt",
+      "title": "Procedure de reponse aux incidents",
+      "classification": "interne",
+      "allowed_roles": "admin,document_manager,user",
+      "content": "Procedure de reponse aux incidents de securite.\nTout incident doit etre signale au CERT dans un delai maximal de 2 heures.\nLe niveau de gravite est classe de 1 (critique) a 4 (mineur).\nUn incident de niveau 1 declenche la cellule de crise immediatement.\nLe rapport post-incident est attendu sous 5 jours ouvrables.\nLe registre des incidents est conserve pendant 3 ans."
+    },
+    {
+      "filename": "charte_teletravail.txt",
+      "title": "Charte du teletravail",
+      "classification": "interne",
+      "allowed_roles": "admin,document_manager,user",
+      "content": "Charte du teletravail des agents.\nLe teletravail est limite a 2 jours par semaine.\nUne demande doit etre deposee au moins 15 jours a l'avance.\nL'utilisation du VPN de l'agence est obligatoire pour tout acces distant.\nL'usage d'un equipement personnel pour traiter des donnees internes est interdit.\nLe responsable hierarchique valide chaque demande."
+    }
+  ],
+  "questions": [
+    {
+      "question": "Quand demarre le projet pilote ?",
+      "expected": ["15 octobre 2026"],
+      "source": "note_cadrage_pilote.txt"
+    },
+    {
+      "question": "Qui est la responsable du projet pilote ?",
+      "expected": ["Amina", "Souley"],
+      "source": "note_cadrage_pilote.txt"
+    },
+    {
+      "question": "Quel est le budget materiel approuve pour le projet pilote ?",
+      "expected": ["12", "FCFA"],
+      "source": "note_cadrage_pilote.txt"
+    },
+    {
+      "question": "Quelle est la longueur minimale exigee pour un mot de passe ?",
+      "expected": ["12"],
+      "source": "politique_mots_de_passe.txt"
+    },
+    {
+      "question": "Tous les combien de jours faut-il renouveler son mot de passe ?",
+      "expected": ["90"],
+      "source": "politique_mots_de_passe.txt"
+    },
+    {
+      "question": "Que se passe-t-il apres 5 tentatives de connexion echouees ?",
+      "expected": ["30"],
+      "source": "politique_mots_de_passe.txt"
+    },
+    {
+      "question": "A quelle frequence la sauvegarde complete est-elle realisee ?",
+      "expected": ["dimanche"],
+      "source": "plan_sauvegarde.txt"
+    },
+    {
+      "question": "Combien de temps les sauvegardes sont-elles conservees ?",
+      "expected": ["90"],
+      "source": "plan_sauvegarde.txt"
+    },
+    {
+      "question": "Dans quel delai un incident de securite doit-il etre signale au CERT ?",
+      "expected": ["2"],
+      "source": "procedure_incident.txt"
+    },
+    {
+      "question": "Combien de temps le registre des incidents est-il conserve ?",
+      "expected": ["3"],
+      "source": "procedure_incident.txt"
+    },
+    {
+      "question": "Combien de jours de teletravail par semaine sont autorises ?",
+      "expected": ["2"],
+      "source": "charte_teletravail.txt"
+    },
+    {
+      "question": "Le VPN est-il obligatoire en teletravail ?",
+      "expected": ["obligatoire"],
+      "source": "charte_teletravail.txt"
+    },
+    {
+      "question": "Quel est le montant de la prime de transport des agents ?",
+      "expected": [],
+      "refusal": true
+    },
+    {
+      "question": "Quelle est la date de la prochaine reunion du conseil d'administration ?",
+      "expected": [],
+      "refusal": true
+    }
+  ]
+}

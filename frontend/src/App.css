@@ -1030,22 +1030,52 @@ nav button.active .icon {
   font-size: 0.75rem;
 }
 
-.loading span:not(.message-label) {
-  display: inline-block;
+.thinking-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.thinking-dots {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.thinking-dots span {
   width: 7px;
   height: 7px;
-  margin: 18px 3px 0;
   border-radius: 50%;
-  background: var(--muted);
+  background: var(--accent-text);
   animation: pulse 1s infinite alternate;
 }
 
-.loading span:nth-child(3) {
+.thinking-dots span:nth-child(2) {
   animation-delay: 0.18s;
 }
 
-.loading span:nth-child(4) {
+.thinking-dots span:nth-child(3) {
   animation-delay: 0.36s;
+}
+
+/* Blinking caret trailing the text as it streams in. */
+.stream-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  margin-left: 2px;
+  border-radius: 1px;
+  background: var(--accent-text);
+  vertical-align: text-bottom;
+  animation: caret 1s steps(2, start) infinite;
+}
+
+@keyframes caret {
+  50% {
+    opacity: 0;
+  }
 }
 
 @keyframes pulse {
@@ -1207,9 +1237,50 @@ legend {
 
 .document-toolbar {
   display: grid;
-  grid-template-columns: 1fr 210px;
+  grid-template-columns: 1fr 210px auto;
+  align-items: center;
   gap: 10px;
   margin: 28px 0 13px;
+}
+
+.toggle-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 0.83rem;
+}
+
+.toggle-field input {
+  width: auto;
+  accent-color: var(--accent);
+}
+
+.version-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  margin-left: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 4px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  vertical-align: middle;
+  font-size: 0.67rem;
+  font-weight: 700;
+}
+
+.version-badge.muted {
+  border-color: var(--line);
+  color: var(--muted);
+  background: var(--card-alt);
+}
+
+.document-card.superseded {
+  opacity: 0.62;
+  border-style: dashed;
 }
 
 .search-field {
@@ -1481,6 +1552,40 @@ legend {
   color: var(--warning);
   background: var(--warning-soft);
   border-color: color-mix(in srgb, var(--gold) 45%, transparent);
+}
+
+.role-pill.self {
+  margin-left: 6px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.user-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.user-actions select {
+  width: auto;
+  padding: 6px 8px;
+  font-size: 0.78rem;
+}
+
+.user-actions .text-button {
+  white-space: nowrap;
+}
+
+.user-actions button:disabled,
+.user-actions select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.user-list article.inactive {
+  opacity: 0.6;
+  border-style: dashed;
 }
 
 .user-list small {
