@@ -203,12 +203,28 @@ async def lifespan(_: FastAPI):
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.2.0", lifespan=lifespan)
+
+LOCALHOST_ORIGIN_PATTERN = r"http://(localhost|127\.0\.0\.1)(:\d+)?"
+
+
+def cors_policy(app_env: str, frontend_origin: str) -> dict[str, object]:
+    """Production allows exactly one origin. Development allows any local port.
+
+    Vite falls back to 5174, 5175… when a port is taken, and http://127.0.0.1 is a
+    different origin from http://localhost. Without this, the preflight is rejected
+    and the browser only reports an opaque "Failed to fetch".
+    """
+    if app_env == "production":
+        return {"allow_origins": [frontend_origin]}
+    return {"allow_origin_regex": LOCALHOST_ORIGIN_PATTERN}
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Content-Type"],
+    **cors_policy(settings.app_env, settings.frontend_origin),
 )
 
 

@@ -6,6 +6,7 @@ These never call Ollama and never touch the database.
 
 import asyncio
 import io
+import re
 import unicodedata
 
 import pytest
@@ -18,6 +19,7 @@ from app.graph import build_assistant_graph
 from app.main import (
     RELEVANCE_THRESHOLD,
     can_access_document,
+    cors_policy,
     enforce_chat_rate_limit,
     enforce_login_rate_limit,
     extract_answer,
@@ -218,6 +220,41 @@ def test_rate_limit_is_per_user(monkeypatch):
     enforce_chat_rate_limit(1002)  # different user must not be blocked
     with pytest.raises(HTTPException):
         enforce_chat_rate_limit(1001)
+
+
+# --------------------------------------------------------------------------
+# CORS policy
+# --------------------------------------------------------------------------
+
+def test_production_allows_only_the_configured_origin():
+    policy = cors_policy("production", "https://assistant.ansi.ne")
+    assert policy == {"allow_origins": ["https://assistant.ansi.ne"]}
+    assert "allow_origin_regex" not in policy, "production must never accept a pattern of origins"
+
+
+@pytest.mark.parametrize(
+    "origin",
+    ["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173", "http://localhost"],
+)
+def test_development_accepts_any_local_port(origin):
+    pattern = cors_policy("development", "http://localhost:5173")["allow_origin_regex"]
+    assert re.fullmatch(pattern, origin), f"{origin} should be usable in development"
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://evil.example.com",
+        "http://localhost.evil.com",
+        "http://127.0.0.1.evil.com",
+        "https://localhost:5173",
+        "http://notlocalhost:5173",
+    ],
+)
+def test_development_still_rejects_foreign_origins(origin):
+    """The development convenience must not become an open door."""
+    pattern = cors_policy("development", "http://localhost:5173")["allow_origin_regex"]
+    assert not re.fullmatch(pattern, origin), f"{origin} must never be accepted"
 
 
 # --------------------------------------------------------------------------
