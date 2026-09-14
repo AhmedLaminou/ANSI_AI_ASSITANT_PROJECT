@@ -30,8 +30,13 @@ que son rôle autorise.
 - Refus explicite lorsqu'aucune source pertinente n'est trouvée, au lieu d'une réponse inventée.
 - **Réponses en streaming** : le texte s'affiche au fil de la génération ; la phase de raisonnement
   du modèle est masquée et n'est jamais enregistrée.
+- **Reformulation automatique** : quand la recherche ne ramène rien d'assez proche, la question est
+  reformulée puis relancée une fois avant tout refus (graphe de décision LangGraph).
+- **OCR local** des PDF scannés (Tesseract, français et anglais) : une page sans couche texte est
+  rastérisée puis reconnue sur la machine, sans rien envoyer à l'extérieur.
 - **Versionnement** : réimporter un fichier de même nom crée une version et remplace la précédente,
   qui n'est plus interrogée mais reste consultable.
+- **PostgreSQL + pgvector** au choix (index HNSW), SQLite par défaut pour le POC.
 - Recherche, filtrage par classification et aperçu autorisé des documents indexés.
 
 ### Sécurité et contrôle d'accès
@@ -42,7 +47,9 @@ que son rôle autorise.
 - Extraits présentés au modèle comme des données non fiables (défense contre l'injection de prompt).
 - **Cycle de vie des comptes** : changement de rôle, désactivation/réactivation, réinitialisation de
   mot de passe — avec garde-fous contre le verrouillage du dernier administrateur.
-- **Limitation de débit** par compte (`CHAT_RATE_LIMIT_PER_MINUTE`).
+- **Protection du formulaire de connexion** : les tentatives échouées sont comptées par compte *et*
+  par adresse source, ce qui bloque aussi bien le forçage d'un compte que le balayage de plusieurs.
+- **Limitation de débit** des questions, par compte (`CHAT_RATE_LIMIT_PER_MINUTE`).
 - **Purge de l'historique** par ancienneté (`CONVERSATION_RETENTION_DAYS`, désactivée par défaut).
 - Journal des actions : import, suppression, question répondue, gestion des comptes.
 - Aucun accès direct du navigateur à Ollama ; aucune API IA externe.
@@ -74,7 +81,12 @@ Puis, depuis `backend`, avec Ollama démarré :
 .\.venv\Scripts\python.exe -m tests.smoke_rag                 # bout en bout, crée et supprime ses données
 .\.venv\Scripts\python.exe -m tests.evaluate                  # qualité des réponses (exactitude, sources, refus, latence)
 .\.venv\Scripts\python.exe -m tests.evaluate --model qwen3:0.6b   # comparer un autre modèle
+.\.venv\Scripts\python.exe -m tests.evaluate --attempts 1         # mesurer l'apport de la reformulation
 ```
+
+Le jeu d'évaluation distingue les questions **à formulation directe** (le vocabulaire de la question
+est celui du document) des questions **à formulation éloignée** (« depuis chez moi » pour
+« télétravail ») : ce sont ces dernières qui mesurent l'apport du graphe de décision.
 
 `tests.evaluate` est le garde-fou à lancer après tout changement de modèle, de découpage ou de seuil.
 

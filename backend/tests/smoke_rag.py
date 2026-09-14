@@ -11,10 +11,23 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 
 from app.auth import password_hash
-from app.database import AuditEvent, ChatMessage, Conversation, DocumentChunk, DocumentRecord, SessionLocal, User
+from app.database import (
+    AuditEvent,
+    ChatMessage,
+    Conversation,
+    DocumentChunk,
+    DocumentRecord,
+    SessionLocal,
+    User,
+    engine,
+    initialise_database,
+)
 from app.main import app
 from app.rag import DOCUMENT_STORAGE_DIR
 
+
+initialise_database()  # a fresh PostgreSQL instance has no tables yet
+print(f"Base de données : {engine.dialect.name}")
 
 admin_name = f"smoke-admin-{uuid.uuid4().hex[:8]}"
 reader_name = f"smoke-reader-{uuid.uuid4().hex[:8]}"

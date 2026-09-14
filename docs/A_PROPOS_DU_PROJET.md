@@ -52,6 +52,11 @@ Ce n'est pas « un ChatGPT installé en local ». Le modèle de langage n'est qu
 9. La réponse, ses sources et l'échange sont enregistrés dans la base locale
 ```
 
+Si aucun extrait n'est assez proche, le système ne renonce pas immédiatement : il **reformule la
+question** avec un vocabulaire plus proche de celui des documents et relance la recherche une fois.
+« Combien de temps puis-je travailler depuis chez moi ? » ne ressemble pas à « le télétravail est
+limité à 2 jours par semaine » — sans cette étape, la réponse existante resterait introuvable.
+
 Point essentiel : **le modèle ne « connaît » pas les documents de l'ANSI.**
 Il ne les a jamais appris. On lui donne les bons extraits au moment de la question,
 et seulement ceux que l'utilisateur a le droit de voir. C'est le principe du RAG
@@ -110,9 +115,10 @@ Cet assistant répond exactement à ces trois points.
 C'est un **POC** — une preuve de faisabilité. Il ne doit pas être présenté comme un système national
 en production. Les limites assumées aujourd'hui :
 
-- Pas d'OCR : un PDF composé uniquement d'images scannées est refusé à l'import.
-- Base SQLite et recherche vectorielle calculée en Python : correct pour quelques dizaines de
-  documents, inadapté à un usage multi-utilisateurs à grande échelle.
+- L'OCR restitue du texte brut sans structure : un tableau scanné devient une suite de mots, pas
+  des colonnes.
+- La base par défaut reste SQLite. PostgreSQL + pgvector est disponible et testé, mais doit être
+  activé — et basculer ne migre pas les documents déjà indexés.
 - Pas d'authentification centrale (SSO / LDAP ANSI) : les comptes sont créés et gérés à la main
   depuis l'interface d'administration.
 - Pas d'outils métier : le modèle ne peut interroger aucune base de données applicative.

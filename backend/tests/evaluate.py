@@ -56,11 +56,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evalue la qualite des reponses du POC ANSI.")
     parser.add_argument("--model", help="Modele de chat a tester (par defaut celui du .env)")
     parser.add_argument("--verbose", action="store_true", help="Affiche chaque reponse complete")
+    parser.add_argument(
+        "--attempts",
+        type=int,
+        help="Tentatives de recherche. 1 desactive la reformulation, 2 l'active.",
+    )
     arguments = parser.parse_args()
 
     settings = get_settings()
     if arguments.model:
         settings.ollama_chat_model = arguments.model
+    if arguments.attempts:
+        settings.max_retrieval_attempts = arguments.attempts
     # The rate limit guards interactive users; a batch harness would trip it on a fast model.
     settings.chat_rate_limit_per_minute = 0
 
@@ -96,9 +103,30 @@ def main() -> None:
             print(f"{len(dataset['questions'])} questions…\n")
             for item in dataset["questions"]:
                 started = time.monotonic()
-                response = client.post("/chat", json={"message": item["question"]})
+                try:
+                    response = client.post("/chat", json={"message": item["question"]})
+                except Exception as failure:  # noqa: BLE001 - a harness must survive any single question
+                    response = None
+                    error = str(failure)
                 elapsed = time.monotonic() - started
-                assert response.status_code == 200, response.text
+
+                if response is None or response.status_code != 200:
+                    # Usually a local model timeout under memory pressure. Record and continue:
+                    # losing the whole run to one slow question wastes ten minutes of work.
+                    detail = error if response is None else response.text[:120]
+                    results.append({
+                        "question": item["question"],
+                        "refusal": bool(item.get("refusal")),
+                        "hard": bool(item.get("hard")),
+                        "correct": False,
+                        "sourced": False,
+                        "seconds": elapsed,
+                        "answer": f"[ECHEC] {detail}",
+                    })
+                    print(f"[ERR] {elapsed:6.1f}s  {item['question']}", flush=True)
+                    print(f"        -> {detail}", flush=True)
+                    continue
+
                 body = response.json()
                 answer = body["answer"]
                 cited = {source["filename"] for source in body["sources"]}
@@ -113,6 +141,7 @@ def main() -> None:
                 results.append({
                     "question": item["question"],
                     "refusal": bool(item.get("refusal")),
+                    "hard": bool(item.get("hard")),
                     "correct": correct,
                     "sourced": sourced,
                     "seconds": elapsed,
@@ -125,11 +154,19 @@ def main() -> None:
                     print(f"        -> {answer.strip()[:300]}", flush=True)
 
             factual = [row for row in results if not row["refusal"]]
+            plain = [row for row in factual if not row["hard"]]
+            hard = [row for row in factual if row["hard"]]
             refusals = [row for row in results if row["refusal"]]
             latencies = sorted(row["seconds"] for row in results)
 
             print("\n" + "=" * 62)
+            print(f"Modele            : {settings.ollama_chat_model}")
+            print(f"Tentatives         : {settings.max_retrieval_attempts} "
+                  f"({'reformulation active' if settings.max_retrieval_attempts > 1 else 'reformulation desactivee'})")
+            print("-" * 62)
             print(f"Exactitude        : {sum(r['correct'] for r in factual)}/{len(factual)}")
+            print(f"  dont formulation directe   : {sum(r['correct'] for r in plain)}/{len(plain)}")
+            print(f"  dont formulation eloignee  : {sum(r['correct'] for r in hard)}/{len(hard)}")
             print(f"Sources correctes : {sum(r['sourced'] for r in factual)}/{len(factual)}")
             print(f"Refus corrects    : {sum(r['correct'] for r in refusals)}/{len(refusals)}")
             print(f"Latence mediane   : {latencies[len(latencies) // 2]:.1f}s")

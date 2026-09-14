@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     frontend_origin: str = "http://localhost:5173"
     cookie_secure: bool = False
     jwt_secret: str
+    # Empty falls back to the local SQLite file. For PostgreSQL + pgvector:
+    # postgresql+psycopg://user:password@host:5432/ansi_ai
+    database_url: str = ""
     bootstrap_admin_username: str | None = None
     bootstrap_admin_password: str | None = None
     ollama_base_url: str = "http://127.0.0.1:11434"
@@ -24,6 +27,18 @@ class Settings(BaseSettings):
     document_max_upload_mb: int = 20
     conversation_retention_days: int = 0  # 0 disables automatic purging
     chat_rate_limit_per_minute: int = 12
+    login_rate_limit_per_minute: int = 5  # failed attempts, per account and per address
+    login_rate_limit_window_seconds: int = 300
+
+    # Local OCR for scanned PDFs. Empty tesseract_cmd disables OCR entirely.
+    tesseract_cmd: str = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    tessdata_dir: str = str(BACKEND_DIR / "data" / "tessdata")
+    ocr_languages: str = "fra+eng"
+    ocr_dpi: int = 300
+    ocr_max_pages: int = 40
+
+    # Retrieval attempts before giving up: 1 disables the rewrite-and-retry branch.
+    max_retrieval_attempts: int = 2
 
     model_config = SettingsConfigDict(env_file=PROJECT_DIR / ".env", env_file_encoding="utf-8", extra="ignore")
 

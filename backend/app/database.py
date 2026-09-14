@@ -1,15 +1,64 @@
+import json
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.types import TypeDecorator
 
-from .config import BACKEND_DIR
+from .config import BACKEND_DIR, get_settings
 
+
+# embeddinggemma produces 768 floats. Changing the embedding model changes this
+# number *and* the vector space: every document must then be re-indexed.
+EMBEDDING_DIMENSIONS = 768
 
 DATABASE_PATH = BACKEND_DIR / "data" / "ansi_ai.db"
-DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
-engine = create_engine(f"sqlite:///{DATABASE_PATH.as_posix()}", connect_args={"check_same_thread": False})
+
+
+def build_engine():
+    """SQLite for the POC, PostgreSQL + pgvector when DATABASE_URL points at one."""
+    url = get_settings().database_url or f"sqlite:///{DATABASE_PATH.as_posix()}"
+    if url.startswith("sqlite"):
+        DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        return create_engine(url, connect_args={"check_same_thread": False})
+    return create_engine(url, pool_pre_ping=True)
+
+
+engine = build_engine()
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+
+def is_postgres() -> bool:
+    return engine.dialect.name == "postgresql"
+
+
+class Embedding(TypeDecorator):
+    """Stored as a real `vector` on PostgreSQL, as JSON text on SQLite.
+
+    Python code always sees a plain list of floats, whichever engine is in use.
+    """
+
+    impl = Text
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            from pgvector.sqlalchemy import Vector
+
+            return dialect.type_descriptor(Vector(EMBEDDING_DIMENSIONS))
+        return dialect.type_descriptor(Text())
+
+    def process_bind_param(self, value, dialect):
+        if value is None or dialect.name == "postgresql":
+            return value
+        return json.dumps(value, separators=(",", ":"))
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if dialect.name == "postgresql":
+            return list(value)
+        return json.loads(value)
 
 
 class Base(DeclarativeBase):
@@ -51,7 +100,7 @@ class DocumentChunk(Base):
     ordinal: Mapped[int] = mapped_column(Integer)
     page_number: Mapped[int] = mapped_column(Integer, default=1)
     content: Mapped[str] = mapped_column(Text)
-    embedding: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(Embedding)
 
 
 class Conversation(Base):
@@ -85,26 +134,60 @@ class AuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
-def ensure_schema() -> None:
-    """Additive SQLite migration for POC databases created before a column existed.
+def ensure_extensions() -> None:
+    """pgvector must exist before create_all() can build a `vector` column."""
+    if not is_postgres():
+        return
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
 
-    Proper migrations (Alembic) arrive with the PostgreSQL move; until then this keeps
-    an existing local database usable instead of forcing operators to delete it.
+
+def ensure_schema() -> None:
+    """Additive migration for databases created before a column existed.
+
+    Proper migrations (Alembic) are the next step; until then this keeps an existing
+    database usable instead of forcing operators to delete it.
     """
     expected = {
         "documents": {
             "version": "INTEGER NOT NULL DEFAULT 1",
-            "is_current": "BOOLEAN NOT NULL DEFAULT 1",
+            "is_current": "BOOLEAN NOT NULL DEFAULT TRUE" if is_postgres() else "BOOLEAN NOT NULL DEFAULT 1",
         },
     }
     with engine.begin() as connection:
         for table, columns in expected.items():
-            present = {row[1] for row in connection.exec_driver_sql(f"PRAGMA table_info({table})")}
+            if is_postgres():
+                present = {
+                    row[0]
+                    for row in connection.exec_driver_sql(
+                        "SELECT column_name FROM information_schema.columns WHERE table_name = %s", (table,)
+                    )
+                }
+            else:
+                present = {row[1] for row in connection.exec_driver_sql(f"PRAGMA table_info({table})")}
             if not present:
                 continue
             for column, definition in columns.items():
                 if column not in present:
                     connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+        if is_postgres():
+            # Approximate nearest-neighbour index; without it pgvector scans every row.
+            connection.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS document_chunks_embedding_hnsw "
+                "ON document_chunks USING hnsw (embedding vector_cosine_ops)"
+            )
+
+
+def initialise_database() -> None:
+    """Bring an empty or older database up to the current schema.
+
+    Single entry point used by the API lifespan and by the test suites, so a fresh
+    PostgreSQL instance is provisioned exactly like SQLite.
+    """
+    ensure_extensions()
+    Base.metadata.create_all(bind=engine)
+    ensure_schema()
 
 
 def get_db():

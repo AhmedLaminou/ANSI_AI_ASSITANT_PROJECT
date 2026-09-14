@@ -3,8 +3,17 @@ uvicorn[standard]>=0.32,<1.0
 httpx>=0.28,<1.0
 pypdf>=5.0,<7.0
 python-docx>=1.1,<2.0
+# OCR des PDF scannés : rendu des pages (licence Apache-2.0/BSD, pas AGPL) + image.
+# Le moteur Tesseract lui-même est un binaire système, installé séparément.
+pypdfium2>=4.30,<6.0
+Pillow>=10.0,<14.0
 python-multipart>=0.0.18,<1.0
 pydantic-settings>=2.6,<3.0
 SQLAlchemy>=2.0,<3.0
+# PostgreSQL + pgvector. Non utilisés tant que DATABASE_URL reste vide (SQLite).
+pgvector>=0.3,<0.5
+psycopg[binary]>=3.2,<4.0
+# Orchestration du parcours de décision (recherche, reformulation, refus).
+langgraph>=0.2,<0.8
 PyJWT>=2.10,<3.0
 pwdlib[argon2]>=0.2,<1.0

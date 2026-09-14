@@ -4,19 +4,28 @@ Run with:  .\.venv\Scripts\python.exe -m pytest tests/test_units.py -q
 These never call Ollama and never touch the database.
 """
 
+import asyncio
+import io
+import unicodedata
+
 import pytest
 from fastapi import HTTPException
+from pypdf import PdfReader
 
+import app.graph
 from app.database import DocumentRecord, User
+from app.graph import build_assistant_graph
 from app.main import (
     RELEVANCE_THRESHOLD,
     can_access_document,
     enforce_chat_rate_limit,
+    enforce_login_rate_limit,
     extract_answer,
+    record_failed_login,
     safe_roles,
-    _chat_calls,
+    _rate_buckets,
 )
-from app.rag import chunk_pages, cosine_similarity, parse_allowed_roles
+from app.rag import chunk_pages, cosine_similarity, extract_pages, ocr_available, parse_allowed_roles
 
 
 # --------------------------------------------------------------------------
@@ -67,6 +76,47 @@ def test_chunk_pages_splits_long_text_with_overlap():
 def test_chunk_pages_normalises_whitespace():
     chunk = chunk_pages([(1, "un   deux\n\n\ttrois")])[0]
     assert chunk.content == "un deux trois"
+
+
+# --------------------------------------------------------------------------
+# OCR fallback for scanned PDFs
+# --------------------------------------------------------------------------
+
+def build_scanned_pdf(lines: list[str]) -> bytes:
+    """An image-only PDF: what a scanner produces, with no embedded text layer."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    image = Image.new("RGB", (1700, 2200), "white")
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 48)
+    except OSError:
+        font = ImageFont.load_default()
+    offset = 200
+    for line in lines:
+        draw.text((150, offset), line, fill="black", font=font)
+        offset += 90
+    buffer = io.BytesIO()
+    image.save(buffer, format="PDF", resolution=200)
+    return buffer.getvalue()
+
+
+@pytest.mark.skipif(not ocr_available(), reason="Tesseract n'est pas installé")
+def test_scanned_pdf_has_no_text_layer_but_ocr_recovers_it():
+    pdf = build_scanned_pdf(["Note de service numero 47", "Reunion le 12 decembre 2026"])
+
+    # Confirm the fixture really is a scan: pypdf alone finds nothing.
+    assert (PdfReader(io.BytesIO(pdf)).pages[0].extract_text() or "").strip() == ""
+
+    recovered = " ".join(text for _, text in extract_pages("scan.pdf", pdf))
+    assert "47" in recovered
+    assert "2026" in recovered
+    assert normalise_accents("decembre") in normalise_accents(recovered)
+
+
+def normalise_accents(text: str) -> str:
+    stripped = unicodedata.normalize("NFD", text.lower())
+    return "".join(character for character in stripped if unicodedata.category(character) != "Mn")
 
 
 # --------------------------------------------------------------------------
@@ -142,28 +192,180 @@ def test_safe_roles_rejects_empty():
 # Rate limiting
 # --------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def clean_rate_buckets():
+    _rate_buckets.clear()
+    yield
+    _rate_buckets.clear()
+
+
 def test_rate_limit_allows_then_blocks(monkeypatch):
     from app import main
 
     monkeypatch.setattr(main.get_settings(), "chat_rate_limit_per_minute", 3, raising=False)
-    _chat_calls.pop(999, None)
     for _ in range(3):
         enforce_chat_rate_limit(999)
     with pytest.raises(HTTPException) as error:
         enforce_chat_rate_limit(999)
     assert error.value.status_code == 429
-    _chat_calls.pop(999, None)
 
 
 def test_rate_limit_is_per_user(monkeypatch):
     from app import main
 
     monkeypatch.setattr(main.get_settings(), "chat_rate_limit_per_minute", 1, raising=False)
-    _chat_calls.pop(1001, None)
-    _chat_calls.pop(1002, None)
     enforce_chat_rate_limit(1001)
     enforce_chat_rate_limit(1002)  # different user must not be blocked
     with pytest.raises(HTTPException):
         enforce_chat_rate_limit(1001)
-    _chat_calls.pop(1001, None)
-    _chat_calls.pop(1002, None)
+
+
+# --------------------------------------------------------------------------
+# Decision graph: conditional branch and bounded cycle
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def stub_rewrite(monkeypatch):
+    async def fake(question):
+        return f"reformulation de {question}"
+
+    monkeypatch.setattr(app.graph, "rewrite_question", fake)
+
+
+def test_weak_retrieval_is_rescued_by_rewriting(stub_rewrite):
+    """A question worded unlike the document must not fail on the first attempt."""
+    seen = []
+
+    async def retrieve(question):
+        seen.append(question)
+        return [(0.05, "faible")] if len(seen) == 1 else [(0.71, "pertinent")]
+
+    graph = build_assistant_graph(retrieve, relevance_threshold=0.18, max_attempts=2)
+    state = asyncio.run(graph.ainvoke({"question": "q", "search_question": "q", "attempts": 0}))
+
+    assert len(seen) == 2, "the graph did not retry after a weak result"
+    assert seen[1] != seen[0], "the retry reused the original wording"
+    assert state["outcome"] == "answer"
+    assert state["rewritten"] is True
+
+
+def test_cycle_is_bounded_and_ends_in_refusal(stub_rewrite):
+    """Nothing relevant must end in a refusal, never an endless rewrite loop."""
+    attempts = []
+
+    async def always_weak(question):
+        attempts.append(question)
+        return [(0.01, "rien")]
+
+    graph = build_assistant_graph(always_weak, relevance_threshold=0.18, max_attempts=2)
+    state = asyncio.run(graph.ainvoke({"question": "q", "search_question": "q", "attempts": 0}))
+
+    assert len(attempts) == 2
+    assert state["outcome"] == "refuse"
+
+
+def test_strong_first_result_skips_the_rewrite_branch(stub_rewrite):
+    """The extra latency of a rewrite must only be paid when it is needed."""
+    attempts = []
+
+    async def strong(question):
+        attempts.append(question)
+        return [(0.83, "pertinent")]
+
+    graph = build_assistant_graph(strong, relevance_threshold=0.18, max_attempts=2)
+    state = asyncio.run(graph.ainvoke({"question": "q", "search_question": "q", "attempts": 0}))
+
+    assert len(attempts) == 1
+    assert state["outcome"] == "answer"
+    assert not state.get("rewritten")
+
+
+def test_empty_retrieval_still_refuses(stub_rewrite):
+    async def nothing(question):
+        return []
+
+    graph = build_assistant_graph(nothing, relevance_threshold=0.18, max_attempts=2)
+    state = asyncio.run(graph.ainvoke({"question": "q", "search_question": "q", "attempts": 0}))
+    assert state["outcome"] == "refuse"
+
+
+def test_retry_can_be_disabled(stub_rewrite):
+    attempts = []
+
+    async def weak(question):
+        attempts.append(question)
+        return [(0.02, "faible")]
+
+    graph = build_assistant_graph(weak, relevance_threshold=0.18, max_attempts=1)
+    state = asyncio.run(graph.ainvoke({"question": "q", "search_question": "q", "attempts": 0}))
+    assert len(attempts) == 1
+    assert state["outcome"] == "refuse"
+
+
+# --------------------------------------------------------------------------
+# Login brute-force protection
+# --------------------------------------------------------------------------
+
+def test_login_limit_blocks_after_repeated_failures(monkeypatch):
+    from app import main
+
+    monkeypatch.setattr(main.get_settings(), "login_rate_limit_per_minute", 3, raising=False)
+    for _ in range(3):
+        enforce_login_rate_limit("victim", "10.0.0.1")
+        record_failed_login("victim", "10.0.0.1")
+    with pytest.raises(HTTPException) as error:
+        enforce_login_rate_limit("victim", "10.0.0.1")
+    assert error.value.status_code == 429
+
+
+def test_login_limit_blocks_same_account_from_another_address(monkeypatch):
+    """Credential stuffing rotating source addresses must still hit the account budget."""
+    from app import main
+
+    monkeypatch.setattr(main.get_settings(), "login_rate_limit_per_minute", 3, raising=False)
+    for index in range(3):
+        enforce_login_rate_limit("victim", f"10.0.0.{index}")
+        record_failed_login("victim", f"10.0.0.{index}")
+    with pytest.raises(HTTPException):
+        enforce_login_rate_limit("victim", "10.0.0.99")
+
+
+def test_login_limit_blocks_spraying_many_accounts_from_one_address(monkeypatch):
+    """Password spraying across accounts must still hit the address budget."""
+    from app import main
+
+    monkeypatch.setattr(main.get_settings(), "login_rate_limit_per_minute", 3, raising=False)
+    for index in range(3):
+        enforce_login_rate_limit(f"account{index}", "10.0.0.7")
+        record_failed_login(f"account{index}", "10.0.0.7")
+    with pytest.raises(HTTPException):
+        enforce_login_rate_limit("another-account", "10.0.0.7")
+
+
+def test_login_limit_is_case_insensitive_on_username(monkeypatch):
+    from app import main
+
+    monkeypatch.setattr(main.get_settings(), "login_rate_limit_per_minute", 2, raising=False)
+    for name in ("Victim", "VICTIM"):
+        enforce_login_rate_limit(name, "10.0.0.5")
+        record_failed_login(name, "10.0.0.5")
+    with pytest.raises(HTTPException):
+        enforce_login_rate_limit("victim", "10.0.0.5")
+
+
+def test_successful_logins_do_not_consume_the_budget(monkeypatch):
+    """Only failures are recorded, so normal use never locks anyone out."""
+    from app import main
+
+    monkeypatch.setattr(main.get_settings(), "login_rate_limit_per_minute", 2, raising=False)
+    for _ in range(20):
+        enforce_login_rate_limit("busy-user", "10.0.0.8")  # no record_failed_login
+
+
+def test_login_limit_disabled_when_zero(monkeypatch):
+    from app import main
+
+    monkeypatch.setattr(main.get_settings(), "login_rate_limit_per_minute", 0, raising=False)
+    for _ in range(50):
+        record_failed_login("victim", "10.0.0.1")
+    enforce_login_rate_limit("victim", "10.0.0.1")  # must not raise

@@ -106,6 +106,34 @@
       "source": "charte_teletravail.txt"
     },
     {
+      "question": "Combien de temps puis-je travailler depuis chez moi chaque semaine ?",
+      "expected": ["2"],
+      "source": "charte_teletravail.txt",
+      "hard": true,
+      "_why": "dit 'depuis chez moi' la ou le document dit 'teletravail'"
+    },
+    {
+      "question": "Que se passe-t-il quand un agent quitte l'agence ?",
+      "expected": ["24"],
+      "source": "procedure_acces.txt",
+      "hard": true,
+      "_why": "dit 'quitte l'agence' la ou le document dit 'depart d'un agent' et 'revocation'"
+    },
+    {
+      "question": "Si je me trompe plusieurs fois en tapant mon code d'acces, que risque-t-il ?",
+      "expected": ["30"],
+      "source": "politique_mots_de_passe.txt",
+      "hard": true,
+      "_why": "dit 'code d'acces' la ou le document dit 'mot de passe'"
+    },
+    {
+      "question": "A quel rythme faut-il changer son code secret ?",
+      "expected": ["90"],
+      "source": "politique_mots_de_passe.txt",
+      "hard": true,
+      "_why": "dit 'code secret' et 'rythme' la ou le document dit 'mot de passe' et 'renouvellement'"
+    },
+    {
       "question": "Quel est le montant de la prime de transport des agents ?",
       "expected": [],
       "refusal": true

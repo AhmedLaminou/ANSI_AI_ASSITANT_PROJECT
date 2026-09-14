@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -17,9 +17,9 @@ from sqlalchemy.orm import Session
 
 from .auth import create_access_token, get_current_user, password_hash, require_roles, verify_password
 from .config import get_settings
+from .graph import build_assistant_graph
 from .database import (
     AuditEvent,
-    Base,
     ChatMessage,
     Conversation,
     DocumentChunk,
@@ -27,19 +27,19 @@ from .database import (
     SessionLocal,
     User,
     engine,
-    ensure_schema,
     get_db,
+    initialise_database,
 )
 from .rag import (
     DOCUMENT_STORAGE_DIR,
     SUPPORTED_EXTENSIONS,
     RagError,
     chunk_pages,
-    cosine_similarity,
     embed_texts,
     extract_pages,
+    ocr_available,
     parse_allowed_roles,
-    serialize_embedding,
+    search_similar_chunks,
 )
 
 
@@ -68,26 +68,66 @@ class ChatContext:
     refusal: str | None
     sources: list[dict[str, object]] = field(default_factory=list)
     request_body: dict[str, object] | None = None
+    rewritten: bool = False  # the graph had to reformulate the question to find sources
 
 
-_chat_calls: dict[int, deque[float]] = defaultdict(deque)
+_rate_buckets: dict[str, deque[float]] = defaultdict(deque)
+
+
+def _within_limit(key: str, limit: int, window_seconds: int) -> bool:
+    """Sliding window counter. In-process only — see ARCHITECTURE_TECHNIQUE §7."""
+    now = time.monotonic()
+    hits = _rate_buckets[key]
+    while hits and now - hits[0] > window_seconds:
+        hits.popleft()
+    if len(hits) >= limit:
+        return False
+    hits.append(now)
+    return True
 
 
 def enforce_chat_rate_limit(user_id: int) -> None:
-    """In-process guard: Ollama answers sequentially, so a burst only builds a queue."""
+    """Ollama answers sequentially, so a burst only builds a queue."""
     limit = get_settings().chat_rate_limit_per_minute
     if limit <= 0:
         return
-    now = time.monotonic()
-    calls = _chat_calls[user_id]
-    while calls and now - calls[0] > 60:
-        calls.popleft()
-    if len(calls) >= limit:
+    if not _within_limit(f"chat:{user_id}", limit, 60):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Trop de questions en peu de temps (maximum {limit} par minute). Réessayez dans un instant.",
         )
-    calls.append(now)
+
+
+def enforce_login_rate_limit(username: str, client_ip: str) -> None:
+    """Throttles credential stuffing on one account and spraying from one address.
+
+    Only failed attempts are counted (see record_failed_login), so a legitimate user
+    is never locked out by their own successful sign-ins.
+    """
+    settings_ = get_settings()
+    limit = settings_.login_rate_limit_per_minute
+    window = settings_.login_rate_limit_window_seconds
+    if limit <= 0:
+        return
+    now = time.monotonic()
+    for key in (f"login-fail:user:{username.lower()}", f"login-fail:ip:{client_ip}"):
+        hits = _rate_buckets[key]
+        while hits and now - hits[0] > window:
+            hits.popleft()
+        if len(hits) >= limit:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Trop de tentatives de connexion échouées. Réessayez dans quelques minutes.",
+            )
+
+
+def record_failed_login(username: str, client_ip: str) -> None:
+    window = get_settings().login_rate_limit_window_seconds
+    now = time.monotonic()
+    for key in (f"login-fail:user:{username.lower()}", f"login-fail:ip:{client_ip}"):
+        _rate_buckets[key].append(now)
+        while _rate_buckets[key] and now - _rate_buckets[key][0] > window:
+            _rate_buckets[key].popleft()
 
 
 class LoginRequest(BaseModel):
@@ -155,8 +195,7 @@ def purge_expired_conversations() -> int:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     DOCUMENT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    Base.metadata.create_all(bind=engine)
-    ensure_schema()
+    initialise_database()
     bootstrap_admin()
     purge_expired_conversations()
     yield
@@ -264,9 +303,20 @@ async def system_status(user: User = Depends(get_current_user)) -> dict[str, obj
 
 
 @app.post("/auth/login", status_code=status.HTTP_204_NO_CONTENT)
-def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)) -> None:
+def login(
+    payload: LoginRequest,
+    response: Response,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> None:
+    client_ip = request.client.host if request.client else "unknown"
+    enforce_login_rate_limit(payload.username, client_ip)
     user = db.scalar(select(User).where(User.username == payload.username))
     if not user or not user.is_active or not verify_password(payload.password, user.password_hash):
+        record_failed_login(payload.username, client_ip)
+        if user:
+            db.add(AuditEvent(actor_id=user.id, document_id=None, event_type="login_failed"))
+            db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identifiants invalides")
     response.set_cookie(
         key="ansi_session",
@@ -343,7 +393,11 @@ async def upload_document(
     try:
         chunks = chunk_pages(extract_pages(original_filename, content))
         if not chunks:
-            raise RagError("Aucun texte exploitable trouvé. Un PDF scanné nécessite une étape OCR.")
+            raise RagError(
+                "Aucun texte exploitable trouvé dans ce document."
+                if ocr_available()
+                else "Aucun texte exploitable trouvé. Ce document semble scanné et l'OCR local n'est pas configuré."
+            )
         embeddings = await embed_texts([chunk.content for chunk in chunks])
     except RagError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -380,7 +434,7 @@ async def upload_document(
                 ordinal=index,
                 page_number=chunk.page_number,
                 content=chunk.content,
-                embedding=serialize_embedding(embeddings[index]),
+                embedding=embeddings[index],
             )
             for index, chunk in enumerate(chunks)
         ])
@@ -505,11 +559,6 @@ def resolve_conversation(db: Session, conversation_id: int | None, user: User) -
 async def build_chat_context(
     db: Session, conversation: Conversation, question: str, user: User, stream: bool
 ) -> ChatContext:
-    try:
-        question_embedding = (await embed_texts([question]))[0]
-    except RagError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
     visible_documents = {
         document.id: document
         for document in db.scalars(select(DocumentRecord).where(DocumentRecord.is_current.is_(True))).all()
@@ -518,19 +567,28 @@ async def build_chat_context(
     if not visible_documents:
         return ChatContext(refusal=NO_DOCUMENTS_ANSWER, sources=[], request_body=None)
 
-    ranked_chunks: list[tuple[float, DocumentChunk, DocumentRecord]] = []
-    for chunk in db.scalars(select(DocumentChunk).where(DocumentChunk.document_id.in_(visible_documents))).all():
-        score = cosine_similarity(question_embedding, json.loads(chunk.embedding))
-        ranked_chunks.append((score, chunk, visible_documents[chunk.document_id]))
-    ranked_chunks.sort(key=lambda result: result[0], reverse=True)
-    selected_chunks = ranked_chunks[:TOP_K]
+    async def retrieve(search_question: str):
+        """ACL is applied here, inside the injected retriever: the graph never sees
+        a document the user is not allowed to read, even after a rewrite."""
+        try:
+            embedding = (await embed_texts([search_question]))[0]
+        except RagError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return search_similar_chunks(db, embedding, list(visible_documents), TOP_K)
 
-    if not selected_chunks or selected_chunks[0][0] < RELEVANCE_THRESHOLD:
+    assistant_graph = build_assistant_graph(retrieve, RELEVANCE_THRESHOLD, settings.max_retrieval_attempts)
+    final_state = await assistant_graph.ainvoke({"question": question, "search_question": question, "attempts": 0})
+
+    if final_state.get("outcome") != "answer":
         return ChatContext(refusal=NO_MATCH_ANSWER, sources=[], request_body=None)
+
+    selected_chunks = final_state["chunks"]
+    rewritten = bool(final_state.get("rewritten"))
 
     source_blocks = []
     source_metadata = []
-    for index, (_, chunk, document) in enumerate(selected_chunks, start=1):
+    for index, (_, chunk) in enumerate(selected_chunks, start=1):
+        document = visible_documents[chunk.document_id]
         source_id = f"S{index}"
         source_blocks.append(f"[{source_id}] Document : {document.title} — page {chunk.page_number}\n{chunk.content}")
         source_metadata.append({"id": source_id, "title": document.title, "filename": document.original_filename, "page": chunk.page_number})
@@ -557,7 +615,7 @@ async def build_chat_context(
         "options": {"num_ctx": 4096, "temperature": 0.15},
         "keep_alive": "10m",
     }
-    return ChatContext(refusal=None, sources=source_metadata, request_body=request_body)
+    return ChatContext(refusal=None, sources=source_metadata, request_body=request_body, rewritten=rewritten)
 
 
 @app.post("/chat")
