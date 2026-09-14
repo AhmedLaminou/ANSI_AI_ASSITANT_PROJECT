@@ -900,6 +900,59 @@ nav button.active .icon {
   line-height: 1.65;
 }
 
+/* Shows the searchable corpus up front: without it a newcomer cannot tell
+   what the assistant is able to answer about. */
+.corpus {
+  padding: 15px 17px;
+  margin-top: 22px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card-alt);
+}
+
+.corpus-label {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.corpus-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.corpus-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink-soft);
+  background: var(--card);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.corpus-item .icon {
+  width: 14px;
+  height: 14px;
+  color: var(--accent-text);
+}
+
+.corpus-item.more {
+  color: var(--muted);
+  background: transparent;
+  border-style: dashed;
+}
+
 .suggestions {
   display: flex;
   flex-wrap: wrap;

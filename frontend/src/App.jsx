@@ -497,13 +497,34 @@ function ChatView({
               <div className="welcome">
                 <p className="overline">PRÊT À RECHERCHER</p>
                 <h3>Que souhaitez-vous savoir&nbsp;?</h3>
-                <p>L'assistant recherche des passages pertinents dans vos documents autorisés, puis cite chaque source utilisée.</p>
+                <p>
+                  L'assistant répond <strong>uniquement</strong> à partir des documents ci-dessous, et cite le document
+                  et la page utilisés. Si l'information ne s'y trouve pas, il le dit au lieu de l'inventer.
+                </p>
+                <div className="corpus">
+                  <p className="corpus-label">
+                    {documents.length} document{documents.length > 1 ? 's' : ''} interrogeable
+                    {documents.length > 1 ? 's' : ''} par votre compte
+                  </p>
+                  <div className="corpus-items">
+                    {documents.slice(0, 6).map((document) => (
+                      <span className="corpus-item" key={document.id}>
+                        <Icon name="doc-text" />
+                        {document.title}
+                      </span>
+                    ))}
+                    {documents.length > 6 && <span className="corpus-item more">+ {documents.length - 6} autres</span>}
+                  </div>
+                </div>
                 <div className="suggestions">
                   <button onClick={() => setMessage('Résume les principaux objectifs présentés dans les documents.')}>
                     Résumer les objectifs
                   </button>
                   <button onClick={() => setMessage('Quelles sont les échéances mentionnées dans les documents ?')}>
                     Identifier les échéances
+                  </button>
+                  <button onClick={() => setMessage('Quels responsables sont nommés dans les documents ?')}>
+                    Retrouver un responsable
                   </button>
                 </div>
               </div>

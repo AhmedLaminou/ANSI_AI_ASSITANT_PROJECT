@@ -110,6 +110,27 @@ Cet assistant répond exactement à ces trois points.
 
 ---
 
+## 4 bis. Ce que l'assistant ne peut pas deviner à votre place
+
+Une remarque revient souvent en démonstration : « on ne comprend pas bien ce que ça fait ».
+
+La cause est presque toujours le **corpus**, pas l'interface. Un assistant documentaire n'a de sens
+que rapporté aux documents qu'il contient : interrogé sur des notes personnelles, il répondra
+fidèlement sur des notes personnelles, et la démonstration paraîtra sans objet. Interrogé sur une
+procédure interne, une note de service ou un règlement, la valeur devient immédiatement lisible.
+
+Pour une démonstration convaincante :
+
+1. Importer 5 à 10 documents **représentatifs du métier** (procédures, notes de service,
+   règlements), non sensibles ou anonymisés.
+2. Attribuer des rôles différents à deux documents, pour montrer le cloisonnement.
+3. Poser une question dont la réponse est vérifiable dans un document précis.
+4. Poser une question dont la réponse **n'existe pas** dans le corpus : le refus est aussi
+   convaincant que la réponse.
+
+L'écran d'accueil de l'assistant affiche désormais la liste des documents interrogeables par le
+compte connecté : le périmètre est visible avant la première question.
+
 ## 5. Ce que ce projet n'est pas (encore)
 
 C'est un **POC** — une preuve de faisabilité. Il ne doit pas être présenté comme un système national

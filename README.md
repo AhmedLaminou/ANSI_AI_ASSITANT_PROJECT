@@ -11,6 +11,33 @@ que son rôle autorise.
 > Voir [docs/A_PROPOS_DU_PROJET.md](docs/A_PROPOS_DU_PROJET.md) pour la comparaison détaillée avec un
 > assistant générique.
 
+## Statut : preuve de concept
+
+**Ce dépôt n'est pas déployable en l'état sur l'infrastructure de l'ANSI.** Ce qui touche à l'IA et
+au contrôle d'accès fonctionne et est mesuré ; ce qui manque relève du déploiement, de la gouvernance
+et des tests de sécurité.
+
+| | État |
+|---|---|
+| Recherche documentaire, réponses sourcées, refus | ✅ Fonctionne, mesuré |
+| Authentification, rôles, cloisonnement par rôle | ✅ Fonctionne, testé |
+| Conteneurisation, reverse proxy, supervision, sauvegardes | ❌ Rien |
+| Politique de rétention et de journalisation | ❌ À arbitrer — **bloquant** |
+| Tests d'injection de prompt et de fuite par les logs | ❌ Jamais exécutés |
+| Outils métier (interroger une base applicative) | ❌ Non implémenté |
+
+Les trois derniers points sont détaillés dans
+[docs/ARCHITECTURE_TECHNIQUE.md](docs/ARCHITECTURE_TECHNIQUE.md) §8. Tant qu'ils ne sont pas traités,
+n'utiliser que des documents non sensibles ou anonymisés.
+
+### Performances observées
+
+Sur un poste de développement (CPU, 16 Go partagés avec l'IDE et le navigateur), avec `qwen3:4b` :
+**≈ 21 s par réponse en médiane**. L'essentiel de ce temps n'est pas la recherche documentaire mais
+le raisonnement interne du modèle, généré puis jeté. Un modèle sans phase de raisonnement est la
+première piste d'accélération ; un GPU est nécessaire dès qu'il y a plusieurs utilisateurs
+simultanés, Ollama traitant les requêtes une par une.
+
 ## Documentation
 
 | Document | Contenu |
@@ -56,6 +83,8 @@ que son rôle autorise.
 
 ### Espace de travail
 
+- Écran d'accueil de l'assistant : **liste des documents réellement interrogeables** par le compte
+  connecté, pour que le périmètre soit visible avant de poser la première question.
 - Tableau de bord : disponibilité des services locaux, nombre de documents accessibles.
 - Conversations personnelles : création, renommage, suppression, historique local par compte.
 - Mémoire courte de conversation (6 derniers messages) sans partage entre comptes.

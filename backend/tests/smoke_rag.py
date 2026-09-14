@@ -54,6 +54,7 @@ try:
         assert uploaded.json()["chunks_indexed"] > 0
         assert uploaded.json()["version"] == 1
         assert uploaded.json()["is_current"] is True
+        own_document_ids = {uploaded.json()["id"]}
 
         # --- non-streaming answer -------------------------------------------------
         answer = client.post("/chat", json={"message": "Quelle est la date de début du projet pilote ANSI ?"})
@@ -89,10 +90,18 @@ try:
         )
         assert second.status_code == 201, second.text
         assert second.json()["version"] == 2, second.json()
-        current = client.get("/documents").json()
+        own_document_ids.add(second.json()["id"])
+
+        # Scope the checks to this test's own documents: the database may hold others.
+        current = [item for item in client.get("/documents").json() if item["id"] in own_document_ids]
         assert len(current) == 1, "superseded version still listed as current"
         assert current[0]["version"] == 2
-        assert len(client.get("/documents", params={"include_superseded": True}).json()) == 2
+        with_history = [
+            item
+            for item in client.get("/documents", params={"include_superseded": True}).json()
+            if item["id"] in own_document_ids
+        ]
+        assert len(with_history) == 2, "the superseded version is no longer retrievable"
 
         # --- account lifecycle ----------------------------------------------------
         reader = next(item for item in client.get("/admin/users").json() if item["username"] == reader_name)
@@ -123,7 +132,12 @@ try:
 
         reader_login = client.post("/auth/login", json={"username": reader_name, "password": "RotatedPassword-2026"})
         assert reader_login.status_code == 204, reader_login.text
-        assert client.get("/documents").json() == [], "reader saw an admin-only document"
+
+        # The database may already hold unrelated documents, so assert the real
+        # invariant — the reader never sees THIS test's admin-only document —
+        # rather than an empty list, which would depend on the environment.
+        visible = {item["id"] for item in client.get("/documents").json()}
+        assert not (visible & own_document_ids), "reader saw an admin-only document"
 
     print("smoke_rag_ok")
 finally:

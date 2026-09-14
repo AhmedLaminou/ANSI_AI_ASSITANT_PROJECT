@@ -647,7 +647,7 @@ async def chat(
         return save_assistant_exchange(db, conversation, payload.message, context.refusal, [], user.id)
 
     try:
-        async with httpx.AsyncClient(timeout=180) as client:
+        async with httpx.AsyncClient(timeout=settings.chat_timeout_seconds) as client:
             response = await client.post(f"{settings.ollama_base_url}/api/chat", json=context.request_body)
             response.raise_for_status()
     except httpx.HTTPError as exc:
@@ -697,7 +697,7 @@ async def chat_stream(
         reasoning_buffer = ""
         answer_parts: list[str] = []
         try:
-            async with httpx.AsyncClient(timeout=300) as client:
+            async with httpx.AsyncClient(timeout=settings.chat_timeout_seconds) as client:
                 async with client.stream("POST", f"{settings.ollama_base_url}/api/chat", json=context.request_body) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():

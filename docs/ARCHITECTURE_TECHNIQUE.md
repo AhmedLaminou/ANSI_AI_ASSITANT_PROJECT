@@ -363,13 +363,70 @@ Ce qui reste à décider — et qui **ne peut pas l'être par défaut** :
 
 C'est le dernier point bloquant avant de traiter des documents réels.
 
-### 5.7 Déploiement
+### 5.7 Déploiement — à quoi ressemblerait la version réelle
 
-**État : non implémenté.** Aujourd'hui : deux processus lancés à la main en développement.
-Cible : conteneurisation (backend, frontend derrière un reverse proxy, base, Ollama), `deny by default`
-sur les flux sortants, supervision, sauvegardes, et **procédure de mise à jour hors ligne** —
-téléchargement et vérification des modèles/paquets dans un environnement connecté, puis transfert
-vers l'environnement de production isolé.
+**État : non implémenté.** Aujourd'hui : deux processus lancés à la main, un serveur de
+développement Vite, une base SQLite, aucun proxy, aucune sauvegarde.
+
+#### Ce qui sépare le POC d'un service
+
+| | POC actuel | Service ANSI |
+|---|---|---|
+| Frontend | `npm run dev` (serveur de développement) | Fichiers statiques compilés, servis par nginx |
+| Backend | `uvicorn --reload` | uvicorn derrière nginx, plusieurs workers, service système |
+| Chiffrement | HTTP en clair, `COOKIE_SECURE=false` | HTTPS obligatoire, `COOKIE_SECURE=true` |
+| Base | SQLite, fichier local | PostgreSQL + pgvector, sauvegardé |
+| Secrets | `.env` à côté du code | Secret injecté par le système, jamais sur disque en clair |
+| Inférence | Ollama sur le poste | Ollama (ou vLLM) sur serveur GPU, écoute locale seule |
+| Réseau | poste connecté | `deny by default` en sortie, aucun accès Internet |
+| Sauvegardes | aucune | base + documents, testées par restauration |
+| Supervision | aucune | disponibilité, latence, taux de refus, erreurs |
+| Comptes | créés à la main | annuaire ANSI (SSO/LDAP) |
+
+#### Topologie cible
+
+```text
+                    RÉSEAU INTERNE ANSI
+   Poste agent
+        │ HTTPS
+        ▼
+   ┌──────────┐   fichiers statiques (frontend compilé)
+   │  nginx   │──────────────────────────────────────┐
+   │  TLS     │                                      │
+   └────┬─────┘                                      ▼
+        │ /api                               (rien vers Internet)
+        ▼
+   ┌──────────────┐      ┌──────────────────────────┐
+   │  Backend     │─────►│ PostgreSQL + pgvector    │
+   │  FastAPI     │      │ (sauvegardé, répliqué)   │
+   └──────┬───────┘      └──────────────────────────┘
+          │ HTTP local (127.0.0.1)
+          ▼
+   ┌──────────────┐
+   │ Ollama/vLLM  │  serveur GPU
+   └──────────────┘
+```
+
+#### Procédure de mise à jour hors ligne
+
+L'environnement de production n'a pas Internet. Les artefacts sont donc préparés ailleurs :
+
+```text
+ENVIRONNEMENT CONNECTÉ              ENVIRONNEMENT ANSI (isolé)
+  ollama pull <modèle>
+  pip download -r requirements.txt
+  npm ci && npm run build
+  fichiers de langue Tesseract
+        │
+        ├─ vérification : empreintes, provenance, licences, versions
+        │
+        └────────── transfert contrôlé ──────────►  installation depuis
+                                                     les artefacts locaux
+```
+
+Aucune étape de l'installation ne doit exiger un accès réseau sortant : c'est le critère qui
+distingue un système réellement hors ligne d'un système qui « marche sans Internet, sauf au
+démarrage ».
 
 ### 5.8 Évaluation de la qualité et choix du modèle
 
@@ -424,7 +481,7 @@ essai à mener, avec un relevé RAM/VRAM en parallèle.
 Attention à la variance : à `temperature 0.15` et sur 12 questions, un écart d'un ou deux points
 entre deux exécutions est du bruit, pas une régression.
 
-### 5.10 Protection de l'authentification
+### 5.9 Protection de l'authentification
 
 **État : implémenté.**
 
@@ -441,7 +498,7 @@ Ce que cela ne couvre pas : le compteur vit dans le processus (§7.9), et une at
 de nombreuses adresses **et** de nombreux comptes reste possible. Un verrouillage de compte
 persistant, décidé avec la politique de sécurité ANSI, serait la mesure suivante.
 
-### 5.9 Robustesse en charge
+### 5.10 Robustesse en charge
 
 **État : garde-fou en place, tests de charge à faire.**
 
@@ -473,8 +530,8 @@ Correspondance avec les phases du document d'architecture (§34).
 | 4 — Sécurité | Authentification, rôles, ACL documentaire avant recherche | ✅ Fait |
 | 4 | Isolation instruction/données (anti-injection) | ✅ Fait |
 | 4 | Cycle de vie des comptes (rôle, désactivation, mot de passe) | ✅ Fait |
-| 4 | Limitation de débit des questions | ✅ Fait (§5.9) |
-| 4 | Protection contre le forçage de mot de passe | ✅ Fait (§5.10) |
+| 4 | Limitation de débit des questions | ✅ Fait (§5.10) |
+| 4 | Protection contre le forçage de mot de passe | ✅ Fait (§5.9) |
 | 4 | Mécanisme de purge de l'historique | ✅ Fait (§5.6) |
 | 4 | Journal d'audit | ⚠️ Basique |
 | 4 | Invalidation des sessions après changement de mot de passe | ❌ À faire (§7.4) |
@@ -484,9 +541,29 @@ Correspondance avec les phases du document d'architecture (§34).
 | 5 | Procédure de mise à jour hors ligne | ❌ À faire |
 | 5 | Tests de charge et de sécurité | ❌ À faire |
 
-Couverture de tests : `tests/test_units.py` (23 tests unitaires, sans Ollama ni base) et
+Couverture de tests : `tests/test_units.py` (45 tests unitaires, sans Ollama ni base) et
 `tests/smoke_rag.py` (bout en bout : import, RAG, streaming, versionnement, cycle de vie des comptes,
 cloisonnement par rôle).
+
+### 6.1 Tests exigés par le §35 du document de conception, non réalisés
+
+C'est la lacune la plus gênante du projet, et elle concerne précisément le métier de l'ANSI.
+
+| Test demandé (§35 « Sécurité ») | État |
+|---|---|
+| **Injection de prompt** | ❌ **Jamais testé.** La défense existe (consigne système isolant données et instructions) mais aucun test ne charge un document piégé pour vérifier qu'elle tient. |
+| Tentative d'accès à un document interdit | ✅ Couvert par `smoke_rag.py` |
+| Données sensibles dans les logs | ❌ Jamais vérifié |
+| Réseau sortant | ❌ Jamais vérifié (nécessite un déploiement) |
+| Authentification | ✅ Couvert |
+| Escalade de privilèges | ⚠️ Partiel : l'auto-blocage d'un administrateur est testé, pas le reste |
+
+Côté §35 « Qualité », ne sont pas couverts : questions ambiguës, documents longs, et **documents
+contradictoires** — ce dernier cas figure pourtant dans [TEST_PLAN.md](TEST_PLAN.md) sans jeu de
+données associé.
+
+Côté §35 « Performance », seule la latence est mesurée : ni temps jusqu'au premier jeton, ni
+jetons/seconde, ni RAM/VRAM, ni nombre d'utilisateurs simultanés soutenables.
 
 ---
 
@@ -516,6 +593,12 @@ cloisonnement par rôle).
    le jour où l'API est répliquée. Vaut pour les questions comme pour les tentatives de connexion.
 10. **Vecteurs en JSON et recherche en Python sur SQLite** — subsiste sur le moteur de repli
     uniquement ; disparaît dès que `DATABASE_URL` pointe vers PostgreSQL (§5.2).
+11. **Le matériel est aujourd'hui le facteur limitant.** Mesuré sur le poste de développement :
+    une question triviale (« réponds uniquement OK ») demande **21 s**, avec 0,5 Go de RAM libre sur
+    16 Go partagés avec l'IDE, le navigateur et les serveurs de développement. Le délai d'attente est
+    configurable (`CHAT_TIMEOUT_SECONDS`) précisément parce qu'un poste chargé dépasse facilement
+    trois minutes. Ce n'est pas un défaut du code : c'est la démonstration qu'un serveur dédié, avec
+    GPU, est nécessaire avant tout usage réel.
 
 ---
 

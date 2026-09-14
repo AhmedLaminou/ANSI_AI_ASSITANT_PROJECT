@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # Retrieval attempts before giving up: 1 disables the rewrite-and-retry branch.
     max_retrieval_attempts: int = 2
 
+    # Seconds allowed for one generation. CPU inference on a loaded machine is slow:
+    # a reasoning model can spend minutes before producing its first useful token.
+    chat_timeout_seconds: int = 300
+
     model_config = SettingsConfigDict(env_file=PROJECT_DIR / ".env", env_file_encoding="utf-8", extra="ignore")
 
 
