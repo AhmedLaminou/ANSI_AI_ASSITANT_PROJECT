@@ -21,7 +21,23 @@ CHUNK_OVERLAP = 150
 
 
 class RagError(Exception):
-    pass
+    """Base class. Prefer one of the two subclasses so the caller can pick a status code."""
+
+
+class DocumentError(RagError):
+    """The document itself cannot be used: unsupported, unreadable, or without text.
+
+    Reported as 422: the client must supply a different file.
+    """
+
+
+class ModelUnavailableError(RagError):
+    """A local model did not answer.
+
+    Reported as 503: nothing is wrong with the document, the service is down or
+    saturated. Conflating the two sends operators looking for a bad file when the
+    real cause is Ollama being unreachable or overloaded.
+    """
 
 
 @dataclass
@@ -95,8 +111,8 @@ def extract_pages(filename: str, content: bytes) -> list[tuple[int, str]]:
         if extension in {".txt", ".md"}:
             return [(1, content.decode("utf-8", errors="replace"))]
     except Exception as exc:
-        raise RagError("Le fichier ne peut pas être lu. Vérifiez son format et son contenu.") from exc
-    raise RagError("Format non pris en charge. Utilisez PDF, DOCX, TXT ou Markdown.")
+        raise DocumentError("Le fichier ne peut pas être lu. Vérifiez son format et son contenu.") from exc
+    raise DocumentError("Format non pris en charge. Utilisez PDF, DOCX, TXT ou Markdown.")
 
 
 def chunk_pages(pages: list[tuple[int, str]]) -> list[ParsedChunk]:
@@ -131,10 +147,10 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
             )
             response.raise_for_status()
     except httpx.HTTPError as exc:
-        raise RagError("Le modèle d'embeddings local est indisponible.") from exc
+        raise ModelUnavailableError("Le modèle d'embeddings local est indisponible ou saturé.") from exc
     embeddings = response.json().get("embeddings")
     if not embeddings or len(embeddings) != len(texts):
-        raise RagError("Le modèle d'embeddings a retourné une réponse invalide.")
+        raise ModelUnavailableError("Le modèle d'embeddings a retourné une réponse invalide.")
     return embeddings
 
 

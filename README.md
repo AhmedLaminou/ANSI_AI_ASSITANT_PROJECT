@@ -55,6 +55,10 @@ simultanés, Ollama traitant les requêtes une par une.
 - Embeddings locaux avec `embeddinggemma` (768 dimensions), recherche par similarité cosinus.
 - Réponses générées par `qwen3:4b` avec citation du document et de la page (`[S1]`, `[S2]`…).
 - Refus explicite lorsqu'aucune source pertinente n'est trouvée, au lieu d'une réponse inventée.
+- **Routage d'intention** : une salutation (« salut », « merci ») reçoit une réponse immédiate qui
+  rappelle le rôle de l'assistant et liste les documents interrogeables, au lieu de déclencher une
+  recherche documentaire vouée à l'échec. Une politesse suivie d'une vraie question reste traitée
+  comme une question.
 - **Réponses en streaming** : le texte s'affiche au fil de la génération ; la phase de raisonnement
   du modèle est masquée et n'est jamais enregistrée.
 - **Reformulation automatique** : quand la recherche ne ramène rien d'assez proche, la question est

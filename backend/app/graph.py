@@ -14,12 +14,54 @@ La génération finale n'est pas un nœud : elle reste en streaming côté endpo
 que l'utilisateur voie la réponse s'écrire. Le graphe décide *quoi* générer.
 """
 
-from typing import Annotated, Any, Callable, TypedDict
+import unicodedata
+from typing import Any, Callable, TypedDict
 
 import httpx
 from langgraph.graph import END, START, StateGraph
 
 from .config import get_settings
+
+
+# A greeting is not a documentary question. Sending "salut" through the retrieval
+# pipeline produces "information non trouvée", which reads as a broken assistant.
+SOCIAL_PATTERNS = (
+    "salut", "bonjour", "bonsoir", "coucou", "hello", "hi", "hey", "yo",
+    "ca va", "comment ca va", "comment vas tu", "comment allez vous",
+    "merci", "merci beaucoup", "ok", "d accord", "au revoir", "bonne journee",
+    "bonne soiree", "a bientot", "bye",
+    "qui es tu", "qui etes vous", "que sais tu faire", "que peux tu faire",
+    "tu sers a quoi", "aide", "help", "test",
+)
+MAX_TRAILING_WORDS = 2
+
+
+def normalise(text: str) -> str:
+    """Lowercase, strip accents and punctuation, collapse spaces."""
+    decomposed = unicodedata.normalize("NFD", text.lower())
+    without_accents = "".join(c for c in decomposed if unicodedata.category(c) != "Mn")
+    cleaned = "".join(c if c.isalnum() or c.isspace() else " " for c in without_accents)
+    return " ".join(cleaned.split())
+
+
+def classify_intent(message: str) -> str:
+    """"social" for greetings and small talk, "documentary" for anything else.
+
+    Deliberately a fast rule rather than a model call: classification must not add
+    twenty seconds to every question just to recognise "bonjour". A greeting followed
+    by a real question stays documentary — only a trailing courtesy is tolerated.
+    """
+    text = normalise(message)
+    if not text:
+        return "social"
+    for pattern in SOCIAL_PATTERNS:
+        if text == pattern:
+            return "social"
+        if text.startswith(pattern + " "):
+            remainder = text[len(pattern):].split()
+            if len(remainder) <= MAX_TRAILING_WORDS:
+                return "social"
+    return "documentary"
 
 
 REWRITE_SYSTEM = (
@@ -36,7 +78,8 @@ class AssistantState(TypedDict, total=False):
     chunks: list[Any]
     best_score: float
     rewritten: bool
-    outcome: str  # "answer" | "refuse"
+    intent: str  # "social" | "documentary"
+    outcome: str  # "answer" | "refuse" | "social"
 
 
 def strip_reasoning(text: str) -> str:
@@ -102,14 +145,27 @@ def build_assistant_graph(
     def refuse_node(state: AssistantState) -> AssistantState:
         return {"outcome": "refuse"}
 
+    def route_node(state: AssistantState) -> AssistantState:
+        return {"intent": classify_intent(state["question"])}
+
+    def route_intent(state: AssistantState) -> str:
+        return "social" if state.get("intent") == "social" else "retrieve"
+
+    def social_node(state: AssistantState) -> AssistantState:
+        return {"outcome": "social"}
+
     graph = StateGraph(AssistantState)
+    graph.add_node("route", route_node)
+    graph.add_node("social", social_node)
     graph.add_node("retrieve", retrieve_node)
     graph.add_node("grade", grade_node)
     graph.add_node("rewrite", rewrite_node)
     graph.add_node("answer", answer_node)
     graph.add_node("refuse", refuse_node)
 
-    graph.add_edge(START, "retrieve")
+    graph.add_edge(START, "route")
+    graph.add_conditional_edges("route", route_intent, {"social": "social", "retrieve": "retrieve"})
+    graph.add_edge("social", END)
     graph.add_edge("retrieve", "grade")
     graph.add_conditional_edges(
         "grade",

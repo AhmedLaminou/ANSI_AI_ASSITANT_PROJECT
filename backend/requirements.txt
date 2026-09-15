@@ -2,6 +2,9 @@ fastapi>=0.115,<1.0
 uvicorn[standard]>=0.32,<1.0
 httpx>=0.28,<1.0
 pypdf>=5.0,<7.0
+# Décodage des polices CFF Type1 (PDF produits par LaTeX) : sans fontTools, pypdf
+# extrait du texte incomplet ou illisible et inonde les logs d'avertissements.
+fonttools>=4.50,<5.0
 python-docx>=1.1,<2.0
 # OCR des PDF scannés : rendu des pages (licence Apache-2.0/BSD, pas AGPL) + image.
 # Le moteur Tesseract lui-même est un binaire système, installé séparément.

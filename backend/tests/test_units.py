@@ -15,7 +15,7 @@ from pypdf import PdfReader
 
 import app.graph
 from app.database import DocumentRecord, User
-from app.graph import build_assistant_graph
+from app.graph import build_assistant_graph, classify_intent
 from app.main import (
     RELEVANCE_THRESHOLD,
     can_access_document,
@@ -255,6 +255,49 @@ def test_development_still_rejects_foreign_origins(origin):
     """The development convenience must not become an open door."""
     pattern = cors_policy("development", "http://localhost:5173")["allow_origin_regex"]
     assert not re.fullmatch(pattern, origin), f"{origin} must never be accepted"
+
+
+# --------------------------------------------------------------------------
+# Intent routing: a greeting must not be treated as a document search
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "message",
+    ["salut", "Bonjour !", "bonsoir", "Coucou", "Merci beaucoup", "ça va ?", "Qui es-tu ?",
+     "Que peux-tu faire ?", "au revoir", "ok", "   ", "hello"],
+)
+def test_greetings_are_social(message):
+    assert classify_intent(message) == "social"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Bonjour, quel est le budget du projet pilote ?",
+        "salut quelle est la politique de mot de passe",
+        "Quelle est la durée de rétention des sauvegardes ?",
+        "Merci de résumer la procédure de gestion des accès",
+        "aide-moi à retrouver la note de cadrage du projet",
+    ],
+)
+def test_real_questions_stay_documentary(message):
+    """A courtesy prefix must not disguise a genuine question as small talk."""
+    assert classify_intent(message) == "documentary"
+
+
+def test_social_path_never_touches_retrieval():
+    """A greeting must cost nothing: no embedding, no search, no generation."""
+    calls = []
+
+    async def retrieve(question):
+        calls.append(question)
+        return [(0.9, "pertinent")]
+
+    graph = build_assistant_graph(retrieve, relevance_threshold=0.18, max_attempts=2)
+    state = asyncio.run(graph.ainvoke({"question": "salut", "search_question": "salut", "attempts": 0}))
+
+    assert state["outcome"] == "social"
+    assert calls == [], "a greeting triggered a document search"
 
 
 # --------------------------------------------------------------------------

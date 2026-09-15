@@ -169,13 +169,34 @@ puis-je travailler depuis chez moi ? » ne rapprochait rien de « le télétrava
 2 jours par semaine ». L'assistant répondait « information non présente » alors qu'elle l'était.
 
 ```text
-   ┌──────────────► retrieve ──────► grade ─┬─ pertinent ─────────► answer ──► (génération)
-   │                                        │
-   │                                        ├─ faible, 1er essai ─► rewrite ──┐
-   │                                        │                                 │
-   │                                        └─ faible, déjà retenté ► refuse  │
-   └─────────────────────────────────────────────────────────────────────────┘
+question
+   │
+   ▼
+ route ─┬─ social ──────────────────────────────────► réponse directe (0 s)
+        │
+        └─ documentaire
+               │
+   ┌───────────▼── retrieve ──────► grade ─┬─ pertinent ─────────► answer ──► (génération)
+   │                                       │
+   │                                       ├─ faible, 1er essai ─► rewrite ──┐
+   │                                       │                                 │
+   │                                       └─ faible, déjà retenté ► refuse  │
+   └────────────────────────────────────────────────────────────────────────┘
 ```
+
+#### Le nœud `route` : pourquoi « salut » ne doit pas déclencher une recherche
+
+Sans routage, **tout** message traversait la chaîne documentaire. « Salut » était donc traité comme
+une requête de recherche, ne trouvait évidemment rien, et l'assistant répondait « information non
+trouvée » à une salutation — un comportement qui donne l'impression d'un outil cassé alors que la
+chaîne fonctionnait exactement comme spécifié.
+
+Le routage est une **règle rapide, pas un appel au modèle** : classifier « bonjour » ne doit pas
+coûter vingt secondes. Une politesse en préfixe ne masque pas une vraie question — « Bonjour, quel
+est le budget ? » reste documentaire, seule une formule de courtesy isolée est sociale.
+
+La réponse sociale énumère les documents interrogeables : elle transforme une impasse en indication
+de ce qu'il est possible de demander. Le refus documentaire fait désormais de même.
 
 - **Arête conditionnelle** après `grade` : trois issues selon le meilleur score obtenu.
 - **Cycle** `rewrite → retrieve`, borné par `MAX_RETRIEVAL_ATTEMPTS` : la boucle ne peut pas
@@ -508,6 +529,28 @@ Ollama traite les requêtes séquentiellement, donc la latence se dégrade dès 
 simultanés. Le compteur vit dans le processus (§7.9). Il manque : file d'attente, mesure du nombre
 d'utilisateurs simultanés soutenables, et tests de charge.
 
+### 5.11 Où passe réellement le temps de réponse
+
+Mesure sur le corpus de test réel (1 365 extraits, dont un ouvrage de 1 296 extraits), poste chargé :
+
+| Étape | Durée |
+|---|---|
+| Vectorisation de la question | 3,8 s |
+| Recherche parmi 1 365 extraits (SQLite, Python) | 0,8 s |
+| **Recherche documentaire totale** | **4,6 s** |
+| Génération de la réponse par `qwen3:4b` | ≈ 37 s |
+| **Total observé** | **≈ 42 s** |
+
+**La génération représente près de 90 % du temps.** Optimiser la recherche n'apporterait donc
+presque rien aujourd'hui : le levier est le modèle (§5.8), puis le matériel (§7.11).
+
+La recherche en Python reste néanmoins un coût linéaire : 0,8 s pour 1 365 extraits signifie environ
+8 s pour 15 000. C'est le seuil à partir duquel PostgreSQL + pgvector (§5.2) cesse d'être un confort
+pour devenir nécessaire.
+
+À noter : sur une question sans réponse dans le corpus, le meilleur score mesuré était `0.227`, là
+encore **au-dessus** du seuil de `0.18` — confirmation indépendante du constat du §5.1.
+
 ---
 
 ## 6. Tableau de synthèse
@@ -525,7 +568,7 @@ Correspondance avec les phases du document d'architecture (§34).
 | 2 | Réponses en streaming | ✅ Fait |
 | 2 | Versionnement des documents | ✅ Fait |
 | 2 | OCR des PDF scannés | ✅ Fait (§5.4) |
-| 3 — Agent | LangGraph : recherche, reformulation, refus | ✅ Fait (§5.1) |
+| 3 — Agent | LangGraph : routage d'intention, recherche, reformulation, refus | ✅ Fait (§5.1) |
 | 3 | Outils métier et routage vers ces outils | ❌ À faire |
 | 4 — Sécurité | Authentification, rôles, ACL documentaire avant recherche | ✅ Fait |
 | 4 | Isolation instruction/données (anti-injection) | ✅ Fait |
