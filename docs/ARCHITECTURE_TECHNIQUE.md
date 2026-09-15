@@ -319,6 +319,60 @@ vectoriel — il faut alors réindexer tous les documents.
 
 ### 5.3 Outils métier (tools)
 
+**État : implémenté** — [`backend/app/tools.py`](../backend/app/tools.py).
+
+« Combien d'utilisateurs sont enregistrés ? » (§9) est une requête, pas une recherche sémantique :
+la réponse n'est dans aucun document. Quatre outils répondent depuis la base :
+
+| Outil | Réponse | Rôles |
+|---|---|---|
+| `count_users` | comptes actifs par rôle | **admin uniquement** |
+| `count_documents` | documents accessibles, par classification | tous |
+| `list_documents` | titres accessibles au compte | tous |
+| `corpus_statistics` | volume indexé, date du dernier import | tous |
+
+Quatre contraintes, directement issues des §18 et §20 :
+
+**Le modèle ne décide jamais d'appeler un outil.** Un appariement déterministe le fait. Laisser un
+modèle de langage choisir quand toucher la base est exactement ce que le §18 déconseille ; une liste
+explicite est auditable, et une question piégée ne peut pas déclencher un outil non prévu.
+
+**Chaque outil déclare les rôles autorisés.** Un `user` qui demande le nombre de comptes reçoit un
+refus explicite, pas la donnée.
+
+**Chaque outil ne voit que ce que son appelant peut voir.** Les comptages documentaires partent de
+l'ensemble autorisé de l'appelant, jamais du corpus entier.
+
+**Aucun SQL libre.** Chaque outil est une fonction fixe, sans paramètre issu de la question : une
+question forgée ne peut pas altérer la requête.
+
+Mesure : **0,02 à 0,08 s** par réponse, contre ~40 s pour le parcours documentaire. Pour ce type de
+question, l'écart est de trois ordres de grandeur.
+
+### 5.3 bis Recherche seule, sans génération
+
+`POST /search` renvoie les passages classés sans rédiger de réponse. La recherche coûte quelques
+secondes, la génération l'essentiel d'une minute (§5.11) : un agent qui veut seulement *retrouver* le
+bon document n'a pas à payer une synthèse. L'interface propose les deux modes sur le même champ de
+saisie.
+
+### 5.3 ter Glossaire et sigles
+
+Le français administratif fonctionne aux sigles. Un agent demande « la DSI » quand le document écrit
+« direction des systèmes d'information » : les deux ne s'embarquent pas au même endroit et le bon
+document n'est jamais retrouvé.
+
+L'expansion porte sur **la question seule**, jamais sur l'index : le glossaire peut évoluer sans
+réindexer quoi que ce soit. La formulation d'origine est conservée et l'expansion ajoutée.
+
+Piège mesuré : un sigle de deux lettres entre en collision avec un mot courant — « SI » contre
+« si ». En dessous de trois caractères, le sigle doit donc être **réellement écrit en capitales**
+pour être développé. Sans cette règle, « que faire si le poste est perdu » injectait « système
+d'information » dans la requête et dégradait la recherche.
+
+Le glossaire par défaut est volontairement générique ; la terminologie ANSI réelle appartient à
+`backend/data/glossary.json`, non versionné, car elle peut elle-même révéler l'organisation interne.
+
 **État : non implémenté.**
 
 Le RAG ne convient pas à tout. « Combien de dossiers ont été traités ce mois-ci ? » se répond par une
@@ -551,6 +605,31 @@ pour devenir nécessaire.
 À noter : sur une question sans réponse dans le corpus, le meilleur score mesuré était `0.227`, là
 encore **au-dessus** du seuil de `0.18` — confirmation indépendante du constat du §5.1.
 
+### 5.12 Date de validité des documents
+
+Le versionnement suit les réimports, mais rien n'empêchait de répondre avec assurance depuis une
+procédure expirée l'an dernier. Dans un contexte administratif, c'est un problème d'exactitude.
+
+Chaque document peut porter une date de fin de validité (facultative). Passé cette date :
+
+- le document reste interrogeable — le retirer silencieusement serait pire — mais
+- l'extrait envoyé au modèle est marqué `DOCUMENT PÉRIMÉ`, afin qu'il puisse le signaler ;
+- la source affichée dans l'interface porte la mention **PÉRIMÉ** ;
+- la fiche du document est marquée dans la base documentaire.
+
+Le choix est délibéré : signaler plutôt que masquer. Un agent doit savoir qu'une procédure a expiré,
+pas se voir répondre que l'information n'existe pas.
+
+### 5.13 Retour utilisateur
+
+Deux boutons sous chaque réponse — « utile » ou « incorrecte ». Chaque signalement enregistre **la
+question** et le verdict, consultables par un administrateur (`GET /admin/feedback`).
+
+C'est le seul mécanisme qui fait grandir le jeu d'évaluation au-delà des questions fictives du §5.8 :
+un « incorrecte » est exactement un cas de test à ajouter. La réponse elle-même n'est pas dupliquée —
+c'est la question qui sert à l'évaluation, et conserver moins de contenu reste le choix prudent tant
+que la politique de rétention n'est pas arbitrée.
+
 ---
 
 ## 6. Tableau de synthèse
@@ -569,7 +648,11 @@ Correspondance avec les phases du document d'architecture (§34).
 | 2 | Versionnement des documents | ✅ Fait |
 | 2 | OCR des PDF scannés | ✅ Fait (§5.4) |
 | 3 — Agent | LangGraph : routage d'intention, recherche, reformulation, refus | ✅ Fait (§5.1) |
-| 3 | Outils métier et routage vers ces outils | ❌ À faire |
+| 3 | Outils métier et routage vers ces outils | ✅ Fait (§5.3) |
+| 2 | Recherche seule, sans génération | ✅ Fait (§5.3 bis) |
+| 2 | Expansion des sigles avant recherche | ✅ Fait (§5.3 ter) |
+| 2 | Date de validité des documents | ✅ Fait (§5.12) |
+| 1 | Boucle de retour utilisateur vers le jeu d'évaluation | ✅ Fait (§5.13) |
 | 4 — Sécurité | Authentification, rôles, ACL documentaire avant recherche | ✅ Fait |
 | 4 | Isolation instruction/données (anti-injection) | ✅ Fait |
 | 4 | Cycle de vie des comptes (rôle, désactivation, mot de passe) | ✅ Fait |

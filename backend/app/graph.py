@@ -21,6 +21,7 @@ import httpx
 from langgraph.graph import END, START, StateGraph
 
 from .config import get_settings
+from .tools import find_tool
 
 
 # A greeting is not a documentary question. Sending "salut" through the retrieval
@@ -78,8 +79,9 @@ class AssistantState(TypedDict, total=False):
     chunks: list[Any]
     best_score: float
     rewritten: bool
-    intent: str  # "social" | "documentary"
-    outcome: str  # "answer" | "refuse" | "social"
+    intent: str  # "social" | "tool" | "documentary"
+    outcome: str  # "answer" | "refuse" | "social" | "tool"
+    tool_answer: str
 
 
 def strip_reasoning(text: str) -> str:
@@ -115,8 +117,10 @@ def build_assistant_graph(
     retrieve: Callable,
     relevance_threshold: float,
     max_attempts: int = 2,
+    run_tool: Callable[[str], str | None] | None = None,
 ):
-    """`retrieve` is injected so the graph stays free of database and ACL concerns."""
+    """`retrieve` and `run_tool` are injected so the graph stays free of database
+    and ACL concerns: both already apply the caller's permissions."""
 
     async def retrieve_node(state: AssistantState) -> AssistantState:
         chunks = await retrieve(state["search_question"])
@@ -146,17 +150,40 @@ def build_assistant_graph(
         return {"outcome": "refuse"}
 
     def route_node(state: AssistantState) -> AssistantState:
-        return {"intent": classify_intent(state["question"])}
+        question = state["question"]
+        if classify_intent(question) == "social":
+            return {"intent": "social"}
+        # A question about the system itself is answered from the database, not
+        # from documents. The match is deterministic: the model never chooses.
+        if run_tool is not None and find_tool(question) is not None:
+            return {"intent": "tool"}
+        return {"intent": "documentary"}
 
     def route_intent(state: AssistantState) -> str:
-        return "social" if state.get("intent") == "social" else "retrieve"
+        intent = state.get("intent")
+        if intent == "social":
+            return "social"
+        if intent == "tool":
+            return "tool"
+        return "retrieve"
 
     def social_node(state: AssistantState) -> AssistantState:
         return {"outcome": "social"}
 
+    def tool_node(state: AssistantState) -> AssistantState:
+        answer = run_tool(state["question"]) if run_tool else None
+        if answer is None:
+            # Refused (wrong role) or no longer matching: fall back to documents.
+            return {"intent": "documentary"}
+        return {"outcome": "tool", "tool_answer": answer}
+
+    def after_tool(state: AssistantState) -> str:
+        return "retrieve" if state.get("outcome") != "tool" else "done"
+
     graph = StateGraph(AssistantState)
     graph.add_node("route", route_node)
     graph.add_node("social", social_node)
+    graph.add_node("tool", tool_node)
     graph.add_node("retrieve", retrieve_node)
     graph.add_node("grade", grade_node)
     graph.add_node("rewrite", rewrite_node)
@@ -164,8 +191,11 @@ def build_assistant_graph(
     graph.add_node("refuse", refuse_node)
 
     graph.add_edge(START, "route")
-    graph.add_conditional_edges("route", route_intent, {"social": "social", "retrieve": "retrieve"})
+    graph.add_conditional_edges(
+        "route", route_intent, {"social": "social", "tool": "tool", "retrieve": "retrieve"}
+    )
     graph.add_edge("social", END)
+    graph.add_conditional_edges("tool", after_tool, {"retrieve": "retrieve", "done": END})
     graph.add_edge("retrieve", "grade")
     graph.add_conditional_edges(
         "grade",

@@ -89,6 +89,9 @@ class DocumentRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     is_current: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", index=True)
+    # An administrative procedure expires. Answering confidently from a document
+    # that lapsed last year is a correctness problem, not a cosmetic one.
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class DocumentChunk(Base):
@@ -124,6 +127,25 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class AnswerFeedback(Base):
+    """One click on an answer. Turns real usage into evaluation cases.
+
+    Stores the question and the verdict, not the answer: the question is what a
+    future evaluation set needs, and keeping less content is the safer default
+    while the retention policy is unsettled.
+    """
+
+    __tablename__ = "answer_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("chat_messages.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    verdict: Mapped[str] = mapped_column(String(16))  # "useful" | "wrong"
+    question: Mapped[str] = mapped_column(Text)
+    comment: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 
@@ -152,6 +174,7 @@ def ensure_schema() -> None:
         "documents": {
             "version": "INTEGER NOT NULL DEFAULT 1",
             "is_current": "BOOLEAN NOT NULL DEFAULT TRUE" if is_postgres() else "BOOLEAN NOT NULL DEFAULT 1",
+            "valid_until": "TIMESTAMP NULL" if is_postgres() else "DATETIME NULL",
         },
     }
     with engine.begin() as connection:

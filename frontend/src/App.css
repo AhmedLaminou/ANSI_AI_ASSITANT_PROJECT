@@ -930,6 +930,9 @@ nav button.active .icon {
   align-items: center;
   gap: 6px;
   max-width: 100%;
+  /* A flex item defaults to min-width:auto and refuses to shrink below its
+     content, so a long title overflows instead of being ellipsised. */
+  min-width: 0;
   overflow: hidden;
   padding: 5px 9px;
   border: 1px solid var(--line);
@@ -1136,6 +1139,150 @@ nav button.active .icon {
     opacity: 0.22;
     transform: translateY(-3px);
   }
+}
+
+/* Two speeds on one input: a synthesised answer, or just the passages. */
+.mode-switch {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--card-alt);
+}
+
+.mode-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 0.79rem;
+  font-weight: 650;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.mode-switch button.active {
+  color: var(--accent-contrast);
+  background: var(--accent);
+}
+
+.mode-switch .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.search-results {
+  display: grid;
+  gap: 9px;
+  padding: 18px 0 6px;
+  overflow: auto;
+}
+
+.search-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.search-hit {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: var(--shadow-sm);
+}
+
+.search-hit-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.search-score {
+  color: var(--accent-text);
+  white-space: nowrap;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.search-hit p {
+  margin: 8px 0 0;
+  color: var(--ink-soft);
+  line-height: 1.6;
+  font-size: 0.86rem;
+}
+
+/* One click turns a bad answer into an evaluation case. */
+.rating {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 13px;
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.rating-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.rating button {
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink-soft);
+  background: var(--card-alt);
+  font-size: 0.78rem;
+  transition: border-color 0.16s ease, color 0.16s ease;
+}
+
+.rating button:hover {
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.rating-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-text);
+  font-size: 0.78rem;
+}
+
+.rating-done .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.source-pill.expired {
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-weight: 700;
+}
+
+.version-badge.danger {
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.document-card.expired .document-symbol {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.field-hint {
+  color: var(--muted);
+  font-weight: 500;
 }
 
 .composer {

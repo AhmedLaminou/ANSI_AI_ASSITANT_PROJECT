@@ -420,6 +420,9 @@ function ChatView({
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [mode, setMode] = useState('assistant')
+  const [results, setResults] = useState(null)
+  const [rated, setRated] = useState({})
   const ready = system?.chat_model_ready && system?.embedding_model_ready
 
   async function submit(event) {
@@ -429,12 +432,38 @@ function ChatView({
     setBusy(true)
     setError('')
     try {
-      await onSend(question)
+      if (mode === 'search') {
+        // Retrieval only: no generation, so seconds instead of a minute.
+        const response = await request('/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: question, limit: 8 }),
+        })
+        setResults({ query: question, items: response.results })
+      } else {
+        await onSend(question)
+        setResults(null)
+      }
       setMessage('')
     } catch (requestError) {
       setError(requestError.message)
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function rate(messageId, verdict) {
+    if (!messageId || rated[messageId]) return
+    try {
+      await request('/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: messageId, verdict }),
+      })
+      setRated((current) => ({ ...current, [messageId]: verdict }))
+      onToast(verdict === 'useful' ? 'Merci, réponse marquée utile.' : 'Merci, réponse signalée comme incorrecte.', 'success')
+    } catch (requestError) {
+      onToast(requestError.message, 'error')
     }
   }
 
@@ -543,10 +572,27 @@ function ChatView({
                   {entry.sources?.length > 0 && (
                     <div className="source-list">
                       {entry.sources.map((source) => (
-                        <span className="source-pill" key={source.id}>
+                        <span className={`source-pill ${source.is_expired ? 'expired' : ''}`} key={source.id}>
                           {source.id} · {source.title} · p. {source.page}
+                          {source.is_expired && ' · PÉRIMÉ'}
                         </span>
                       ))}
+                    </div>
+                  )}
+                  {entry.role === 'assistant' && entry.id && (
+                    <div className="rating">
+                      {rated[entry.id] ? (
+                        <span className="rating-done">
+                          <Icon name="check" />
+                          {rated[entry.id] === 'useful' ? 'Marquée utile' : 'Signalée comme incorrecte'}
+                        </span>
+                      ) : (
+                        <>
+                          <span className="rating-label">Cette réponse vous a-t-elle aidé&nbsp;?</span>
+                          <button onClick={() => rate(entry.id, 'useful')}>Utile</button>
+                          <button onClick={() => rate(entry.id, 'wrong')}>Incorrecte</button>
+                        </>
+                      )}
                     </div>
                   )}
                 </article>
@@ -585,7 +631,42 @@ function ChatView({
             )}
           </div>
         )}
+        {results && (
+          <div className="search-results">
+            <div className="search-head">
+              <p className="overline">RÉSULTATS POUR « {results.query} »</p>
+              <button className="text-button" onClick={() => setResults(null)}>
+                <Icon name="close" /> Fermer
+              </button>
+            </div>
+            {results.items.length === 0 ? (
+              <p className="empty-list">Aucun passage correspondant dans vos documents autorisés.</p>
+            ) : (
+              results.items.map((item, index) => (
+                <article className="search-hit" key={`${item.document_id}-${item.page}-${index}`}>
+                  <div className="search-hit-head">
+                    <strong>{item.title}</strong>
+                    <span className="search-score">p. {item.page} · {Math.round(item.score * 100)}%</span>
+                  </div>
+                  <p>{item.excerpt}…</p>
+                </article>
+              ))
+            )}
+          </div>
+        )}
         <form className="composer" onSubmit={submit}>
+          <div className="mode-switch" role="group" aria-label="Mode de recherche">
+            <button
+              type="button"
+              className={mode === 'assistant' ? 'active' : ''}
+              onClick={() => setMode('assistant')}
+            >
+              <Icon name="chat" /> Assistant
+            </button>
+            <button type="button" className={mode === 'search' ? 'active' : ''} onClick={() => setMode('search')}>
+              <Icon name="search" /> Recherche rapide
+            </button>
+          </div>
           <div className="composer-input">
             <textarea
               value={message}
@@ -606,10 +687,13 @@ function ChatView({
           {error && <p className="error">{error}</p>}
           <div className="composer-footer">
             <span>
-              {documents.length} document{documents.length > 1 ? 's' : ''} accessible{documents.length > 1 ? 's' : ''} · Entrée pour envoyer, Maj+Entrée pour un saut de ligne
+              {mode === 'search'
+                ? 'Recherche seule : retrouve les passages, sans rédiger de réponse — quelques secondes.'
+                : `${documents.length} document${documents.length > 1 ? 's' : ''} accessible${documents.length > 1 ? 's' : ''} · Entrée pour envoyer, Maj+Entrée pour un saut de ligne`}
             </span>
             <button className="primary" disabled={!documents.length || busy}>
-              <Icon name="send" /> {busy ? 'Analyse locale…' : 'Envoyer'}
+              <Icon name={mode === 'search' ? 'search' : 'send'} />{' '}
+              {busy ? (mode === 'search' ? 'Recherche…' : 'Analyse locale…') : mode === 'search' ? 'Rechercher' : 'Envoyer'}
             </button>
           </div>
         </form>
@@ -650,6 +734,7 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
   const [file, setFile] = useState(null)
   const [title, setTitle] = useState('')
   const [classification, setClassification] = useState('interne')
+  const [validUntil, setValidUntil] = useState('')
   const [allowedRoles, setAllowedRoles] = useState(['admin', 'document_manager', 'user'])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -693,10 +778,12 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
     form.append('title', title || file.name.replace(/\.[^.]+$/, ''))
     form.append('classification', classification)
     form.append('allowed_roles', allowedRoles.join(','))
+    form.append('valid_until', validUntil)
     try {
       const uploaded = await request('/documents/upload', { method: 'POST', body: form })
       setFile(null)
       setTitle('')
+      setValidUntil('')
       await onRefresh()
       onToast(`« ${uploaded.title} » importé et indexé (${uploaded.chunks_indexed} extraits).`, 'success')
     } catch (requestError) {
@@ -766,6 +853,10 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
               <input type="file" accept=".pdf,.docx,.txt,.md" onChange={(event) => setFile(event.target.files[0] ?? null)} />
               {file ? <span>{file.name}</span> : <span>Choisir un fichier</span>}
             </label>
+            <label>
+              Valide jusqu'au <span className="field-hint">(facultatif)</span>
+              <input type="date" value={validUntil} onChange={(event) => setValidUntil(event.target.value)} />
+            </label>
           </div>
           <fieldset>
             <legend>Rôles autorisés</legend>
@@ -819,7 +910,10 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
           </div>
         ) : (
           filteredDocuments.map((document) => (
-            <article className={`document-card ${document.is_current ? '' : 'superseded'}`} key={document.id}>
+            <article
+              className={`document-card ${document.is_current ? '' : 'superseded'} ${document.is_expired ? 'expired' : ''}`}
+              key={document.id}
+            >
               <div className="document-symbol">
                 <Icon name="doc-text" />
               </div>
@@ -828,6 +922,7 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
                   {document.title}
                   {document.version > 1 && <span className="version-badge">v{document.version}</span>}
                   {!document.is_current && <span className="version-badge muted">remplacée</span>}
+                  {document.is_expired && <span className="version-badge danger">périmée</span>}
                 </h3>
                 <p>{document.filename}</p>
                 <div className="tags">
@@ -1083,6 +1178,7 @@ function App() {
     let answer = ''
     let sources = []
     let failure = null
+    let messageId = null
     try {
       await streamChat({ message: question, conversation_id: activeConversation?.id ?? null }, (event) => {
         if (event.type === 'meta') {
@@ -1100,6 +1196,7 @@ function App() {
           failure = event.detail
         } else if (event.type === 'done') {
           const conversation = event.conversation
+          messageId = event.message_id ?? null
           setActiveConversation(conversation)
           setConversations((current) => [conversation, ...current.filter((item) => item.id !== conversation.id)])
         }
@@ -1109,7 +1206,7 @@ function App() {
     }
 
     if (failure) throw new Error(failure)
-    setMessages((current) => [...current, { role: 'assistant', content: answer.trim(), sources }])
+    setMessages((current) => [...current, { id: messageId, role: 'assistant', content: answer.trim(), sources }])
   }
 
   useEffect(() => {

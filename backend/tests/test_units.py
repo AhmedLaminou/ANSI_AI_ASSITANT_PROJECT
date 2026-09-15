@@ -16,6 +16,8 @@ from pypdf import PdfReader
 import app.graph
 from app.database import DocumentRecord, User
 from app.graph import build_assistant_graph, classify_intent
+from app.glossary import expand_acronyms
+from app.tools import find_tool
 from app.main import (
     RELEVANCE_THRESHOLD,
     can_access_document,
@@ -298,6 +300,116 @@ def test_social_path_never_touches_retrieval():
 
     assert state["outcome"] == "social"
     assert calls == [], "a greeting triggered a document search"
+
+
+# --------------------------------------------------------------------------
+# Acronym expansion
+# --------------------------------------------------------------------------
+
+def test_acronym_is_expanded():
+    expanded = expand_acronyms("Quelles sont les obligations de la DSI ?")
+    assert "direction des systèmes d'information" in expanded
+    assert "DSI" in expanded, "the original wording must be preserved"
+
+
+def test_expansion_is_skipped_when_already_explicit():
+    question = "Quelles sont les obligations de la direction des systèmes d'information ?"
+    assert expand_acronyms(question) == question
+
+
+def test_unknown_acronym_leaves_the_question_untouched():
+    question = "Quelles sont les règles du XYZQ ?"
+    assert expand_acronyms(question) == question
+
+
+def test_acronym_matching_ignores_case_and_accents():
+    assert "réseau privé virtuel" in expand_acronyms("le vpn est-il obligatoire ?")
+
+
+def test_acronym_does_not_match_inside_a_word():
+    """'SI' must not fire on 'ainsi' or 'si'."""
+    question = "Ainsi, que faut-il faire si le poste est perdu ?"
+    assert expand_acronyms(question) == question
+
+
+# --------------------------------------------------------------------------
+# Business tools: matched deterministically, never chosen by the model
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("Combien d'utilisateurs sont enregistrés ?", "count_users"),
+        ("Quel est le nombre de comptes ?", "count_users"),
+        ("Combien de documents sont accessibles ?", "count_documents"),
+        ("Quels documents puis-je consulter ?", "list_documents"),
+        ("Donne-moi les statistiques du corpus", "corpus_statistics"),
+    ],
+)
+def test_tool_questions_are_matched(question, expected):
+    tool = find_tool(question)
+    assert tool is not None and tool.name == expected
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Combien de jours de télétravail par semaine ?",
+        "Quelle est la durée de rétention des sauvegardes ?",
+        "Qui est le responsable du projet pilote ?",
+        "Combien de temps faut-il pour signaler un incident ?",
+    ],
+)
+def test_documentary_questions_do_not_trigger_a_tool(question):
+    """A question about document *content* must not be answered from the database."""
+    assert find_tool(question) is None
+
+
+def test_count_users_is_admin_only():
+    tool = find_tool("Combien d'utilisateurs sont enregistrés ?")
+    assert tool.roles == frozenset({"admin"})
+
+
+def test_other_tools_are_open_to_every_role():
+    for question in ("Combien de documents ?", "Quels documents ?", "statistiques"):
+        assert find_tool(question).roles == frozenset({"admin", "document_manager", "user"})
+
+
+def test_tool_branch_short_circuits_retrieval():
+    """A database question must not embed, search or generate."""
+    searched = []
+
+    async def retrieve(question):
+        searched.append(question)
+        return [(0.9, "pertinent")]
+
+    graph = build_assistant_graph(
+        retrieve, relevance_threshold=0.18, max_attempts=2, run_tool=lambda q: "42 comptes actifs."
+    )
+    state = asyncio.run(
+        graph.ainvoke({"question": "Combien d'utilisateurs ?", "search_question": "x", "attempts": 0})
+    )
+    assert state["outcome"] == "tool"
+    assert state["tool_answer"] == "42 comptes actifs."
+    assert searched == [], "a database question triggered a document search"
+
+
+def test_unmatched_tool_falls_back_to_documents():
+    """If the tool declines, the question must still reach the documents."""
+    searched = []
+
+    async def retrieve(question):
+        searched.append(question)
+        return [(0.9, "pertinent")]
+
+    graph = build_assistant_graph(
+        retrieve, relevance_threshold=0.18, max_attempts=2, run_tool=lambda q: None
+    )
+    state = asyncio.run(
+        graph.ainvoke({"question": "Combien de documents ?", "search_question": "Combien de documents ?", "attempts": 0})
+    )
+    assert state["outcome"] == "answer"
+    assert searched, "the fallback never reached retrieval"
 
 
 # --------------------------------------------------------------------------

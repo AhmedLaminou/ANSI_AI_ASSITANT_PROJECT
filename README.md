@@ -59,6 +59,18 @@ simultanés, Ollama traitant les requêtes une par une.
   rappelle le rôle de l'assistant et liste les documents interrogeables, au lieu de déclencher une
   recherche documentaire vouée à l'échec. Une politesse suivie d'une vraie question reste traitée
   comme une question.
+- **Outils métier** : « combien d'utilisateurs sont enregistrés ? », « quels documents puis-je
+  consulter ? » sont des requêtes en base, pas des recherches sémantiques. Réponse en **0,05 s** au
+  lieu de 40 s. Le modèle ne décide jamais d'appeler un outil : l'appariement est déterministe et
+  chaque outil applique les droits de l'appelant.
+- **Recherche seule** : retrouve les passages sans rédiger de réponse, pour l'agent qui veut
+  seulement identifier le bon document — quelques secondes au lieu d'une minute.
+- **Expansion des sigles** : « la DSI » retrouve « direction des systèmes d'information ». Le
+  glossaire s'étend sans réindexer, dans `backend/data/glossary.json`.
+- **Date de validité** : une procédure expirée reste consultable mais est signalée comme périmée,
+  au modèle comme à l'utilisateur.
+- **Retour utilisateur** : un clic marque une réponse utile ou incorrecte ; chaque signalement
+  alimente le jeu d'évaluation.
 - **Réponses en streaming** : le texte s'affiche au fil de la génération ; la phase de raisonnement
   du modèle est masquée et n'est jamais enregistrée.
 - **Reformulation automatique** : quand la recherche ne ramène rien d'assez proche, la question est
