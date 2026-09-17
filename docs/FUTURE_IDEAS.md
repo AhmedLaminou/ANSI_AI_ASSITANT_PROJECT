@@ -225,12 +225,41 @@ both are decisions for ANSI rather than for the code — see §6:
    an operator must not mix individual files with rules in one document.
 
 
-### Phase D — Vocabulary
+### Phase D — Vocabulary — **done (2026-09-17)**
 
-- Split `backend/data/glossary.json` per department; keep a shared section.
-- Mind the trap already hit: two-letter acronyms collide with ordinary French words ("SI" vs "si"),
-  so below three characters the acronym must be capitalised. The same acronym may mean different
-  things in different departments — itself an argument for separate glossaries.
+Implemented in [`backend/app/glossary.py`](../backend/app/glossary.py).
+
+- `backend/data/glossary.json` is now sectioned — `commun` plus one section per department — and
+  the **legacy flat shape still loads**, treated as the shared section, so an existing operator file
+  keeps working. The two shapes may be mixed.
+- Each service reads the shared section plus its own, its own winning on collision. An administrator
+  reads every perimeter, so an ambiguous acronym expands to **both** readings joined by "ou":
+  ambiguity should broaden the search, not resolve itself silently in favour of one service.
+- `glossary.expand_for(user, question)` is the single mapping from an account to its glossary — the
+  same discipline as `access.can_access_document`.
+- An unknown section name ("informatique" instead of "technique") is ignored **and logged as a
+  warning**. Loading silently and never being selected is the worse of the two failures.
+- The two-letter trap still holds and is now replayed for each of the four services.
+
+**The collision that justifies the split.** In francophone public administration "CP" is *congés
+payés* to an HR officer, *crédits de paiement* to an accountant, and *chef de projet* in the
+technical service. A flat glossary has to pick one and is wrong for two services out of three.
+
+**What the measurement showed.** `tests/glossary_probe.py` is built so the perimeter cannot explain
+the outcome: both documents are filed `transverse`, so every account may read both, and neither
+spells out "CP". The only difference between accounts is the glossary expanding their question.
+
+Same question for all three — *"Quelles sont les règles applicables aux CP ?"*:
+
+| Account | First result |
+|---|---|
+| HR | **Congés payés** |
+| Finance | **Crédits de paiement** |
+| Administrator | both come back |
+
+The ranking inverts at identical corpus and identical perimeter. 3/3 checks passed. The probe goes
+through `/search` and generates nothing, so it runs in seconds.
+
 
 ### Phase E — Tools and access to ANSI data
 

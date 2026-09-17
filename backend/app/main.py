@@ -26,7 +26,7 @@ from .access import (
     department_label,
 )
 from .config import get_settings
-from .glossary import expand_acronyms
+from .glossary import expand_for
 from .graph import build_assistant_graph
 from .prompts import assistant_description, system_message
 from .tools import find_tool
@@ -722,7 +722,7 @@ async def build_chat_context(
         try:
             # Acronyms are expanded on the question only: the index stays untouched,
             # so the glossary can grow without re-indexing anything.
-            embedding = (await embed_texts([expand_acronyms(search_question)]))[0]
+            embedding = (await embed_texts([expand_for(user, search_question)]))[0]
         except RagError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return search_similar_chunks(db, embedding, list(visible_documents), TOP_K)
@@ -825,7 +825,7 @@ async def search_documents(
         return {"results": [], "detail": NO_DOCUMENTS_ANSWER}
 
     try:
-        embedding = (await embed_texts([expand_acronyms(payload.query)]))[0]
+        embedding = (await embed_texts([expand_for(user, payload.query)]))[0]
     except ModelUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

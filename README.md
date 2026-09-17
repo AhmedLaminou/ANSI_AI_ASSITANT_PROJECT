@@ -69,8 +69,12 @@ simultanés, Ollama traitant les requêtes une par une.
   chaque outil applique les droits de l'appelant.
 - **Recherche seule** : retrouve les passages sans rédiger de réponse, pour l'agent qui veut
   seulement identifier le bon document — quelques secondes au lieu d'une minute.
-- **Expansion des sigles** : « la DSI » retrouve « direction des systèmes d'information ». Le
-  glossaire s'étend sans réindexer, dans `backend/data/glossary.json`.
+- **Expansion des sigles, par service** : « la DSI » retrouve « direction des systèmes
+  d'information ». Surtout, un même sigle ne veut pas dire la même chose partout : « CP » est un
+  *congé payé* aux RH, un *crédit de paiement* aux finances, un *chef de projet* au technique.
+  Chaque service lit la section commune plus la sienne ; un administrateur reçoit les deux
+  lectures. Mesuré : à corpus et périmètre identiques, le premier résultat s'inverse selon le
+  service. Le glossaire s'étend sans réindexer, dans `backend/data/glossary.json`.
 - **Consignes par service** : les instructions données au modèle dépendent du service de l'agent.
   Un agent des finances reçoit « cite les montants avec leur exercice, n'additionne jamais deux
   chiffres que la source n'additionne pas » ; un agent RH reçoit « réponds sur la règle, jamais sur
@@ -147,7 +151,7 @@ Puis, depuis `backend`, avec Ollama démarré :
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_units.py -q   # logique pure, rapide, sans Ollama
-.\.venv\Scripts\python.exe -m pytest tests/ -q                   # toute la suite hors ligne : 153 contrôles
+.\.venv\Scripts\python.exe -m pytest tests/ -q                   # toute la suite hors ligne : 177 contrôles
 .\.venv\Scripts\python.exe -m tests.smoke_rag                 # bout en bout, crée et supprime ses données
 .\.venv\Scripts\python.exe -m tests.evaluate                  # qualité des réponses (exactitude, sources, refus, latence)
 .\.venv\Scripts\python.exe -m tests.evaluate --model qwen3:0.6b   # comparer un autre modèle
@@ -155,6 +159,7 @@ Puis, depuis `backend`, avec Ollama démarré :
 .\.venv\Scripts\python.exe -m tests.security_probe              # injection de prompt et cloisonnement (nécessite Ollama)
 .\.venv\Scripts\python.exe -m tests.registration_probe          # demande d'accès et approbation (sans Ollama)
 .\.venv\Scripts\python.exe -m tests.prompt_probe                # les consignes par service changent-elles les réponses (Ollama)
+.\.venv\Scripts\python.exe -m tests.glossary_probe              # le glossaire par service change-t-il le classement (Ollama, rapide)
 ```
 
 Le jeu d'évaluation distingue les questions **à formulation directe** (le vocabulaire de la question

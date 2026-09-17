@@ -160,7 +160,7 @@ et rien sur les documents lisibles : l'accès est décidé dans `access.py`, à 
 Le choix du bloc est une lecture de dictionnaire sur le service stocké en base. Le modèle ne
 choisit pas ses propres consignes (§18 et §20 du document de conception).
 
-`tests/test_prompts.py` (32 contrôles) tient cette séparation : les deux invariants survivent à
+`tests/test_prompts.py` (32 contrôles sur la composition des consignes) et `tests/test_glossary.py` (24 contrôles sur les glossaires par service).
 la composition pour chaque service, un service ne reçoit que son propre bloc, aucun bloc ne
 contient de formulation d'octroi, et la règle « données non fiables » reste dans l'invariant —
 la déplacer dans un bloc de service la rendrait supprimable un service à la fois.
@@ -518,7 +518,9 @@ secondes, la génération l'essentiel d'une minute (§5.11) : un agent qui veut 
 bon document n'a pas à payer une synthèse. L'interface propose les deux modes sur le même champ de
 saisie.
 
-### 5.3 ter Glossaire et sigles
+### 5.3 ter Glossaire et sigles, par service
+
+**État : implémenté** — [`backend/app/glossary.py`](../backend/app/glossary.py).
 
 Le français administratif fonctionne aux sigles. Un agent demande « la DSI » quand le document écrit
 « direction des systèmes d'information » : les deux ne s'embarquent pas au même endroit et le bon
@@ -527,19 +529,64 @@ document n'est jamais retrouvé.
 L'expansion porte sur **la question seule**, jamais sur l'index : le glossaire peut évoluer sans
 réindexer quoi que ce soit. La formulation d'origine est conservée et l'expansion ajoutée.
 
-Piège mesuré : un sigle de deux lettres entre en collision avec un mot courant — « SI » contre
-« si ». En dessous de trois caractères, le sigle doit donc être **réellement écrit en capitales**
-pour être développé. Sans cette règle, « que faire si le poste est perdu » injectait « système
-d'information » dans la requête et dégradait la recherche.
+#### Pourquoi un glossaire par service
+
+Un même sigle ne veut pas dire la même chose dans deux services. Dans l'administration
+francophone, **« CP »** est un *congé payé* pour un agent des ressources humaines, un *crédit de
+paiement* pour un comptable, et un *chef de projet* au service technique. Un glossaire unique doit
+en choisir un, et se trompe pour deux services sur trois.
+
+Chaque service lit donc **la section commune plus la sienne**, la sienne l'emportant en cas de
+collision. Un administrateur, qui lit tous les périmètres, reçoit **les deux lectures** jointes par
+« ou » : pour lui l'ambiguïté doit élargir la recherche, pas se trancher en silence en faveur d'un
+service.
+
+`glossary.expand_for(user, question)` est le seul endroit qui relie un compte à son glossaire —
+même principe que `access.can_access_document` : dérivé de la ligne en base, dans une seule
+fonction, pour qu'un appelant ne puisse pas se tromper discrètement.
+
+#### Ce que la mesure a montré
+
+`tests/glossary_probe.py` est construit pour que **le cloisonnement ne puisse pas expliquer le
+résultat** : les deux documents sont classés `transverse`, donc lisibles par tous les comptes, et
+aucun des deux n'écrit « CP ». La seule différence entre les comptes est le glossaire qui développe
+leur question.
+
+Même question pour les trois — « Quelles sont les règles applicables aux CP ? » :
+
+| Compte | Premier résultat |
+|---|---|
+| Service RH | **Congés payés** |
+| Service finances | **Crédits de paiement** |
+| Administrateur | les deux remontent |
+
+Le classement s'inverse, à corpus et périmètre identiques. 3/3 contrôles passés (2026-09-17).
+La sonde passe par `/search` et ne génère rien : elle s'exécute en quelques secondes.
+
+#### Le piège des sigles courts
+
+Un sigle de deux lettres entre en collision avec un mot courant — « SI » contre « si ». En dessous
+de trois caractères, le sigle doit donc être **réellement écrit en capitales** pour être développé.
+Sans cette règle, « que faire si le poste est perdu » injectait « système d'information » dans la
+requête et dégradait la recherche. `test_glossary.py` rejoue ce cas pour **chacun** des quatre
+services.
+
+#### Le fichier de l'exploitant
 
 Le glossaire par défaut est volontairement générique ; la terminologie ANSI réelle appartient à
 `backend/data/glossary.json`, non versionné, car elle peut elle-même révéler l'organisation interne.
+Deux formes sont acceptées, et peuvent être mélangées :
 
-**État : non implémenté.**
+```json
+{"ANSI": "Agence Nationale ..."}                      forme historique, section commune
+{"commun": {...}, "rh": {...}, "finance": {...}}      par service
+```
 
-Le RAG ne convient pas à tout. « Combien de dossiers ont été traités ce mois-ci ? » se répond par une
-requête, pas par une recherche sémantique. Principe à respecter : **jamais d'accès SQL libre au modèle**,
-uniquement des fonctions étroites, avec paramètres validés, droits minimaux, quotas et journalisation.
+Un nom de section inconnu — « informatique » au lieu de « technique » — est **ignoré et
+journalisé en avertissement** : sans cela il se chargerait sans jamais être sélectionné par
+personne, ce qui est le pire des deux échecs. Un fichier illisible n'interrompt jamais
+l'indexation : les valeurs par défaut reprennent la main.
+
 
 ### 5.4 OCR pour les PDF scannés
 
@@ -812,7 +859,7 @@ Correspondance avec les phases du document d'architecture (§34).
 | 3 — Agent | LangGraph : routage d'intention, recherche, reformulation, refus | ✅ Fait (§5.1) |
 | 3 | Outils métier et routage vers ces outils | ✅ Fait (§5.3) |
 | 2 | Recherche seule, sans génération | ✅ Fait (§5.3 bis) |
-| 2 | Expansion des sigles avant recherche | ✅ Fait (§5.3 ter) |
+| 2 | Expansion des sigles avant recherche, par service | ✅ Fait (§5.3 ter) |
 | 2 | Date de validité des documents | ✅ Fait (§5.12) |
 | 1 | Boucle de retour utilisateur vers le jeu d'évaluation | ✅ Fait (§5.13) |
 | 4 — Sécurité | Authentification, rôles, ACL documentaire avant recherche | ✅ Fait |
@@ -833,13 +880,15 @@ Correspondance avec les phases du document d'architecture (§34).
 | 5 | Procédure de mise à jour hors ligne | ❌ À faire |
 | 5 | Tests de charge et de sécurité | ❌ À faire |
 
-Couverture de tests, hors ligne : **153 contrôles** — `tests/test_units.py` (logique pure),
+Couverture de tests, hors ligne : **177 contrôles** — `tests/test_units.py` (logique pure),
 `tests/test_access.py` (40 contrôles de périmètre, toutes les paires de services dans les deux sens),
-`tests/test_prompts.py` (32 contrôles sur la composition des consignes).
+`tests/test_prompts.py` (32 contrôles sur la composition des consignes) et `tests/test_glossary.py`
+(24 contrôles sur les glossaires par service).
 
 Sondes nécessitant Ollama : `tests/smoke_rag.py` (bout en bout), `tests/security_probe.py`
 (injection de prompt et fuite entre services), `tests/prompt_probe.py` (effet réel des consignes
-par service), `tests/registration_probe.py` (demande d'accès, sans Ollama).
+par service), `tests/glossary_probe.py` (effet du glossaire sur le classement, rapide car sans
+génération), `tests/registration_probe.py` (demande d'accès, sans Ollama).
 
 ### 6.1 Tests exigés par le §35 du document de conception, non réalisés
 
