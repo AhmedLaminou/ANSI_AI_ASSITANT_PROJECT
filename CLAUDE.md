@@ -34,6 +34,8 @@ From `backend/`:
 .\.venv\Scripts\python.exe -m pytest tests/test_units.py -q  # fast, no Ollama needed
 .\.venv\Scripts\python.exe -m tests.smoke_rag                # end to end, slow, needs Ollama
 .\.venv\Scripts\python.exe -m tests.evaluate                 # quality: accuracy, sources, refusals, latency
+.\.venv\Scripts\python.exe -m tests.security_probe              # prompt injection and cross-department leakage
+.\.venv\Scripts\python.exe -m tests.prompt_probe                # do the per-department prompts change the answers
 .\.venv\Scripts\python.exe -m app.create_admin               # create an administrator
 .\.venv\Scripts\python.exe -m app.reset_password             # reset an account's password
 ```

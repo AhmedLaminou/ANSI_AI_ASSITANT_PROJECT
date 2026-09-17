@@ -71,6 +71,11 @@ simultanés, Ollama traitant les requêtes une par une.
   seulement identifier le bon document — quelques secondes au lieu d'une minute.
 - **Expansion des sigles** : « la DSI » retrouve « direction des systèmes d'information ». Le
   glossaire s'étend sans réindexer, dans `backend/data/glossary.json`.
+- **Consignes par service** : les instructions données au modèle dépendent du service de l'agent.
+  Un agent des finances reçoit « cite les montants avec leur exercice, n'additionne jamais deux
+  chiffres que la source n'additionne pas » ; un agent RH reçoit « réponds sur la règle, jamais sur
+  une personne ». Les garde-fous communs encadrent ces consignes et ne peuvent pas être affaiblis
+  par elles — vérifié par 32 contrôles automatiques.
 - **Date de validité** : une procédure expirée reste consultable mais est signalée comme périmée,
   au modèle comme à l'utilisateur.
 - **Retour utilisateur** : un clic marque une réponse utile ou incorrecte ; chaque signalement
@@ -91,6 +96,13 @@ simultanés, Ollama traitant les requêtes une par une.
 - Authentification locale, session par cookie `HttpOnly`, mots de passe hachés en Argon2.
 - Rôles `admin`, `document_manager` et `user` ; chaque document porte la liste des rôles autorisés.
 - Filtrage des documents **avant** la recherche sémantique, jamais par simple consigne au modèle.
+- **Cloisonnement par service** : quatre services (technique, finances, logistique, RH) ; un compte
+  lit son service et les documents transverses, jamais le périmètre d'un autre. Le service
+  **restreint et n'élargit jamais** : appartenir aux RH ne donne aucun droit sur un document RH dont
+  les rôles autorisés vous excluent.
+- **Demande d'accès** : un nouvel arrivant dépose une demande ; l'administrateur central accorde le
+  rôle et le service, qui ne sont pas nécessairement ceux demandés. Un compte en attente ne lit rien
+  et ne peut pas se connecter.
 - Extraits présentés au modèle comme des données non fiables (défense contre l'injection de prompt).
 - **Cycle de vie des comptes** : changement de rôle, désactivation/réactivation, réinitialisation de
   mot de passe — avec garde-fous contre le verrouillage du dernier administrateur.
@@ -135,12 +147,14 @@ Puis, depuis `backend`, avec Ollama démarré :
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_units.py -q   # logique pure, rapide, sans Ollama
+.\.venv\Scripts\python.exe -m pytest tests/ -q                   # toute la suite hors ligne : 153 contrôles
 .\.venv\Scripts\python.exe -m tests.smoke_rag                 # bout en bout, crée et supprime ses données
 .\.venv\Scripts\python.exe -m tests.evaluate                  # qualité des réponses (exactitude, sources, refus, latence)
 .\.venv\Scripts\python.exe -m tests.evaluate --model qwen3:0.6b   # comparer un autre modèle
 .\.venv\Scripts\python.exe -m tests.evaluate --attempts 1         # mesurer l'apport de la reformulation
 .\.venv\Scripts\python.exe -m tests.security_probe              # injection de prompt et cloisonnement (nécessite Ollama)
 .\.venv\Scripts\python.exe -m tests.registration_probe          # demande d'accès et approbation (sans Ollama)
+.\.venv\Scripts\python.exe -m tests.prompt_probe                # les consignes par service changent-elles les réponses (Ollama)
 ```
 
 Le jeu d'évaluation distingue les questions **à formulation directe** (le vocabulaire de la question
