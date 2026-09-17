@@ -1435,9 +1435,95 @@ legend {
   accent-color: var(--accent);
 }
 
+/* Perimeter badge: the department a document belongs to. */
+.tag-department {
+  font-weight: 700;
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.tag-department.transverse {
+  border-color: var(--line);
+  color: var(--muted);
+  background: var(--card-alt);
+}
+
+/* Keyboard hints in the navigation, kept quiet until hover or focus. */
+.nav-key {
+  margin-left: auto;
+  padding: 1px 5px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  color: var(--sidebar-muted);
+  font-size: 0.62rem;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+nav button:hover .nav-key,
+nav button.active .nav-key,
+.logout:hover .nav-key {
+  opacity: 1;
+}
+
+.logout .nav-key {
+  margin-left: 6px;
+  border-color: var(--line);
+}
+
+.shortcut-modal {
+  width: min(460px, 100%);
+  border-radius: 15px;
+  background: var(--card);
+  box-shadow: var(--shadow-lg);
+}
+
+.shortcut-modal header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 22px 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.shortcut-modal h2 {
+  margin: 5px 0 0;
+  font-size: 1.35rem;
+}
+
+.shortcut-list {
+  display: grid;
+  gap: 10px;
+  padding: 20px 24px 24px;
+}
+
+.shortcut-list > div {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.shortcut-list kbd {
+  min-width: 124px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--card-alt);
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+}
+
+.shortcut-list span {
+  color: var(--ink-soft);
+  font-size: 0.87rem;
+}
+
 .document-toolbar {
   display: grid;
-  grid-template-columns: 1fr 210px auto;
+  grid-template-columns: minmax(0, 1fr) 190px 190px auto;
   align-items: center;
   gap: 10px;
   margin: 28px 0 13px;

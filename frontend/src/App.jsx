@@ -5,6 +5,23 @@ const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 const ROLES = ['admin', 'document_manager', 'user']
 const CLASSIFICATIONS = ['interne', 'direction', 'confidentiel']
 
+// Mirrors backend/app/access.py. "transverse" is not a department: it is the
+// perimeter of documents that concern everyone.
+const DEPARTMENTS = [
+  { value: 'technique', label: 'Technique / informatique' },
+  { value: 'finance', label: 'Finance / comptabilité' },
+  { value: 'logistique', label: 'Logistique' },
+  { value: 'rh', label: 'Ressources humaines' },
+]
+const DOCUMENT_DEPARTMENTS = [...DEPARTMENTS, { value: 'transverse', label: 'Transverse (tous services)' }]
+
+const TABS = [
+  { id: 'overview', label: "Vue d'ensemble", icon: 'grid' },
+  { id: 'chat', label: 'Assistant', icon: 'chat' },
+  { id: 'documents', label: 'Documents', icon: 'folder' },
+  { id: 'users', label: 'Utilisateurs', icon: 'users', admin: true },
+]
+
 async function request(path, options = {}) {
   const response = await fetch(`${API_URL}${path}`, { credentials: 'include', ...options })
   if (!response.ok) {
@@ -187,6 +204,70 @@ async function copyToClipboard(text) {
   helper.select()
   document.execCommand('copy')
   document.body.removeChild(helper)
+}
+
+/** Keyboard navigation. Alt+1..4 switch section, Ctrl/Cmd+K focuses the question
+ * field, "?" opens the shortcut list. Alt is used rather than Ctrl for sections
+ * so browser tab-switching keeps working. */
+function useShortcuts({ onSection, onFocusComposer, onToggleHelp, enabled }) {
+  useEffect(() => {
+    if (!enabled) return undefined
+    function handle(event) {
+      const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName)
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        onFocusComposer()
+        return
+      }
+      if (event.altKey && ['1', '2', '3', '4'].includes(event.key)) {
+        event.preventDefault()
+        onSection(Number(event.key) - 1)
+        return
+      }
+      if (event.key === '?' && !typing) {
+        event.preventDefault()
+        onToggleHelp()
+      }
+      if (event.key === 'Escape') onToggleHelp(false)
+    }
+    window.addEventListener('keydown', handle)
+    return () => window.removeEventListener('keydown', handle)
+  }, [enabled, onSection, onFocusComposer, onToggleHelp])
+}
+
+function ShortcutHelp({ open, onClose }) {
+  if (!open) return null
+  const rows = [
+    ['Alt + 1 … 4', 'Changer de section'],
+    ['Ctrl / Cmd + K', 'Aller au champ de question'],
+    ['Entrée', 'Envoyer la question'],
+    ['Maj + Entrée', 'Saut de ligne'],
+    ['?', 'Afficher ou masquer cette aide'],
+    ['Échap', 'Fermer'],
+  ]
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="shortcut-modal" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+        <header>
+          <div>
+            <p className="overline">RACCOURCIS CLAVIER</p>
+            <h2>Navigation rapide</h2>
+          </div>
+          <button className="modal-close" onClick={onClose}>
+            <Icon name="close" />
+          </button>
+        </header>
+        <div className="shortcut-list">
+          {rows.map(([keys, what]) => (
+            <div key={keys}>
+              <kbd>{keys}</kbd>
+              <span>{what}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -734,6 +815,7 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
   const [file, setFile] = useState(null)
   const [title, setTitle] = useState('')
   const [classification, setClassification] = useState('interne')
+  const [department, setDepartment] = useState('transverse')
   const [validUntil, setValidUntil] = useState('')
   const [allowedRoles, setAllowedRoles] = useState(['admin', 'document_manager', 'user'])
   const [busy, setBusy] = useState(false)
@@ -742,6 +824,7 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
   const [filter, setFilter] = useState('all')
   const [preview, setPreview] = useState(null)
   const [showSuperseded, setShowSuperseded] = useState(false)
+  const [departmentFilter, setDepartmentFilter] = useState('all')
   const [withHistory, setWithHistory] = useState(null)
   const canManage = user.role === 'admin' || user.role === 'document_manager'
 
@@ -758,9 +841,10 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
       listed.filter(
         (document) =>
           (filter === 'all' || document.classification === filter) &&
+          (departmentFilter === 'all' || document.department === departmentFilter) &&
           `${document.title} ${document.filename}`.toLowerCase().includes(query.toLowerCase()),
       ),
-    [listed, filter, query],
+    [listed, filter, departmentFilter, query],
   )
 
   function toggleRole(role) {
@@ -779,6 +863,7 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
     form.append('classification', classification)
     form.append('allowed_roles', allowedRoles.join(','))
     form.append('valid_until', validUntil)
+    form.append('department', department)
     try {
       const uploaded = await request('/documents/upload', { method: 'POST', body: form })
       setFile(null)
@@ -841,6 +926,16 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
               <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Ex. Rapport trimestriel" />
             </label>
             <label>
+              Service concerné
+              <select value={department} onChange={(event) => setDepartment(event.target.value)}>
+                {DOCUMENT_DEPARTMENTS.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
               Classification
               <select value={classification} onChange={(event) => setClassification(event.target.value)}>
                 <option value="interne">Interne</option>
@@ -886,6 +981,14 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
             </option>
           ))}
         </select>
+        <select value={departmentFilter} onChange={(event) => setDepartmentFilter(event.target.value)}>
+          <option value="all">Tous les services</option>
+          {DOCUMENT_DEPARTMENTS.map((item) => (
+            <option key={item.value} value={item.value}>
+              {item.label}
+            </option>
+          ))}
+        </select>
         <label className="toggle-field" title="Les versions remplacées ne sont plus interrogées par l'assistant">
           <input
             type="checkbox"
@@ -926,6 +1029,7 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
                 </h3>
                 <p>{document.filename}</p>
                 <div className="tags">
+                  <span className={`tag-department ${document.department}`}>{document.department_label}</span>
                   <span className={`tag-classification ${document.classification}`}>{document.classification}</span>
                   {document.allowed_roles.map((role) => (
                     <span key={role}>{role}</span>
@@ -1109,6 +1213,7 @@ function App() {
   const [tab, setTab] = useState('overview')
   const [loadError, setLoadError] = useState('')
   const [theme, toggleTheme] = useTheme()
+  const [showShortcuts, setShowShortcuts] = useState(false)
   const { toasts, push: pushToast } = useToasts()
 
   async function refreshDocuments() {
@@ -1213,6 +1318,21 @@ function App() {
     request('/auth/me').then(initialize).catch(() => undefined)
   }, [])
 
+  useShortcuts({
+    enabled: Boolean(user),
+    onSection: (index) => {
+      const available = TABS.filter((item) => !item.admin || user?.role === 'admin')
+      if (available[index]) setTab(available[index].id)
+    },
+    onFocusComposer: () => {
+      setTab('chat')
+      // The composer belongs to ChatView; querying the DOM avoids threading a ref
+      // through three components for a single focus call.
+      window.requestAnimationFrame(() => document.querySelector('.composer textarea')?.focus())
+    },
+    onToggleHelp: (next) => setShowShortcuts((current) => (next === false ? false : !current)),
+  })
+
   if (!user) return <Login onLogin={initialize} theme={theme} onToggleTheme={toggleTheme} />
 
   async function logout() {
@@ -1226,12 +1346,7 @@ function App() {
     setTab('overview')
   }
 
-  const tabs = [
-    { id: 'overview', label: "Vue d'ensemble", icon: 'grid' },
-    { id: 'chat', label: 'Assistant', icon: 'chat' },
-    { id: 'documents', label: 'Documents', icon: 'folder' },
-    { id: 'users', label: 'Utilisateurs', icon: 'users', admin: true },
-  ]
+  const visibleTabs = TABS.filter((item) => !item.admin || user.role === 'admin')
 
   return (
     <main className="app-shell">
@@ -1244,14 +1359,18 @@ function App() {
           </div>
         </div>
         <nav>
-          {tabs
-            .filter((item) => !item.admin || user.role === 'admin')
-            .map((item) => (
-              <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}>
-                <Icon name={item.icon} />
-                {item.label}
-              </button>
-            ))}
+          {visibleTabs.map((item, index) => (
+            <button
+              key={item.id}
+              className={tab === item.id ? 'active' : ''}
+              onClick={() => setTab(item.id)}
+              title={`${item.label} (Alt+${index + 1})`}
+            >
+              <Icon name={item.icon} />
+              {item.label}
+              <span className="nav-key">Alt{index + 1}</span>
+            </button>
+          ))}
         </nav>
         <div className="side-footer">
           <button className="theme-toggle" onClick={toggleTheme} title="Changer de thème">
@@ -1262,9 +1381,14 @@ function App() {
             <div className="avatar">{user.username.slice(0, 1).toUpperCase()}</div>
             <div>
               <strong>{user.username}</strong>
-              <span>{user.role}</span>
+              <span>
+                {user.role} · {user.sees_every_department ? 'tous services' : user.department_label}
+              </span>
             </div>
           </div>
+          <button className="logout" onClick={() => setShowShortcuts(true)}>
+            <Icon name="spark" /> Raccourcis clavier <span className="nav-key">?</span>
+          </button>
           <button className="logout" onClick={logout}>
             <Icon name="logout" /> Déconnexion
           </button>
@@ -1294,6 +1418,7 @@ function App() {
         )}
         {tab === 'users' && <UsersView user={user} onToast={pushToast} />}
       </section>
+      <ShortcutHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       <ToastStack toasts={toasts} />
     </main>
   )

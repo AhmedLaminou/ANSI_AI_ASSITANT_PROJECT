@@ -73,6 +73,12 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(32), default="user")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Perimeter, independent of the role. NULL means not yet assigned (pending account).
+    department: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    # pending | active | refused | suspended. Existing rows default to active.
+    status: Mapped[str] = mapped_column(String(16), default="active", server_default="active", index=True)
+    requested_department: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    request_reason: Mapped[str] = mapped_column(Text, default="", server_default="")
 
 
 class DocumentRecord(Base):
@@ -92,6 +98,10 @@ class DocumentRecord(Base):
     # An administrative procedure expires. Answering confidently from a document
     # that lapsed last year is a correctness problem, not a cosmetic one.
     valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Which perimeter the document belongs to; "transverse" means every department.
+    department: Mapped[str] = mapped_column(
+        String(32), default="transverse", server_default="transverse", index=True
+    )
 
 
 class DocumentChunk(Base):
@@ -175,6 +185,13 @@ def ensure_schema() -> None:
             "version": "INTEGER NOT NULL DEFAULT 1",
             "is_current": "BOOLEAN NOT NULL DEFAULT TRUE" if is_postgres() else "BOOLEAN NOT NULL DEFAULT 1",
             "valid_until": "TIMESTAMP NULL" if is_postgres() else "DATETIME NULL",
+            "department": "VARCHAR(32) NOT NULL DEFAULT 'transverse'",
+        },
+        "users": {
+            "department": "VARCHAR(32) NULL",
+            "status": "VARCHAR(16) NOT NULL DEFAULT 'active'",
+            "requested_department": "VARCHAR(32) NULL",
+            "request_reason": "TEXT NOT NULL DEFAULT ''",
         },
     }
     with engine.begin() as connection:

@@ -17,6 +17,14 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .auth import create_access_token, get_current_user, password_hash, require_roles, verify_password
+from .access import (
+    DEPARTMENT_LABELS,
+    DEPARTMENTS,
+    DOCUMENT_DEPARTMENTS,
+    TRANSVERSE,
+    can_access_document,
+    department_label,
+)
 from .config import get_settings
 from .glossary import expand_acronyms
 from .graph import build_assistant_graph
@@ -183,11 +191,13 @@ class CreateUserRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
     password: str = Field(min_length=12, max_length=128)
     role: str = Field(default="user")
+    department: str | None = None
 
 
 class UpdateUserRequest(BaseModel):
     role: str | None = None
     is_active: bool | None = None
+    department: str | None = None
 
 
 class ResetPasswordRequest(BaseModel):
@@ -274,10 +284,6 @@ app.add_middleware(
 )
 
 
-def can_access_document(user: User, document: DocumentRecord) -> bool:
-    return user.role in parse_allowed_roles(document.allowed_roles)
-
-
 def document_summary(document: DocumentRecord) -> dict[str, object]:
     return {
         "id": document.id,
@@ -288,6 +294,8 @@ def document_summary(document: DocumentRecord) -> dict[str, object]:
         "created_at": document.created_at.isoformat(),
         "version": document.version,
         "is_current": document.is_current,
+        "department": document.department,
+        "department_label": department_label(document.department),
         "valid_until": document.valid_until.isoformat() if document.valid_until else None,
         "is_expired": is_expired(document),
     }
@@ -313,6 +321,9 @@ def account_summary(account: User) -> dict[str, object]:
         "username": account.username,
         "role": account.role,
         "is_active": account.is_active,
+        "department": account.department,
+        "department_label": department_label(account.department),
+        "status": account.status,
     }
 
 
@@ -341,6 +352,17 @@ def safe_roles(raw_roles: str) -> str:
     if not requested or not requested.issubset(ROLES):
         raise HTTPException(status_code=422, detail="Rôles documentaires invalides")
     return ",".join(sorted(requested))
+
+
+def safe_department(raw: str) -> str:
+    """A department is chosen from a closed set, never free text from the client."""
+    candidate = (raw or TRANSVERSE).strip().lower()
+    if candidate not in DOCUMENT_DEPARTMENTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Département invalide. Valeurs acceptées : {', '.join(sorted(DOCUMENT_DEPARTMENTS))}.",
+        )
+    return candidate
 
 
 def model_is_available(model: str, installed_models: list[str]) -> bool:
@@ -415,7 +437,14 @@ def logout(response: Response) -> None:
 @app.get("/auth/me")
 def current_user(user: User = Depends(get_current_user)) -> dict[str, object]:
     # id lets the interface disable actions an admin must not apply to their own account
-    return {"id": user.id, "username": user.username, "role": user.role}
+    return {
+        "id": user.id,
+        "username": user.username,
+        "role": user.role,
+        "department": user.department,
+        "department_label": department_label(user.department),
+        "sees_every_department": user.role == "admin",
+    }
 
 
 @app.get("/documents")
@@ -454,6 +483,7 @@ async def upload_document(
     classification: str = Form("interne", min_length=2, max_length=64),
     allowed_roles: str = Form(DEFAULT_ALLOWED_ROLES),
     valid_until: str = Form(""),
+    department: str = Form(TRANSVERSE),
     user: User = Depends(require_roles("admin", "document_manager")),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
@@ -515,6 +545,7 @@ async def upload_document(
             version=max((item.version for item in previous), default=0) + 1,
             is_current=True,
             valid_until=parse_valid_until(valid_until),
+            department=safe_department(department),
         )
         db.add(document)
         db.flush()
@@ -970,7 +1001,15 @@ def create_user(
         raise HTTPException(status_code=422, detail="Rôle invalide")
     if db.scalar(select(User).where(User.username == payload.username)):
         raise HTTPException(status_code=409, detail="Cet identifiant existe déjà")
-    account = User(username=payload.username, password_hash=password_hash.hash(payload.password), role=payload.role)
+    if payload.department is not None and payload.department not in DEPARTMENTS:
+        raise HTTPException(status_code=422, detail="Département invalide")
+    account = User(
+        username=payload.username,
+        password_hash=password_hash.hash(payload.password),
+        role=payload.role,
+        department=payload.department,
+        status="active",
+    )
     db.add(account)
     db.flush()
     db.add(AuditEvent(actor_id=admin.id, document_id=None, event_type="user_created"))
@@ -1000,8 +1039,14 @@ def update_user(
     if losing_admin and count_active_admins(db) <= 1:
         raise HTTPException(status_code=422, detail="Au moins un administrateur actif doit subsister")
 
+    if payload.department is not None and payload.department not in DEPARTMENTS:
+        raise HTTPException(status_code=422, detail="Département invalide")
     account.role = next_role
     account.is_active = next_active
+    if payload.department is not None:
+        # Takes effect immediately: authorisation reads the database on every
+        # request, never a claim carried in the token.
+        account.department = payload.department
     db.add(AuditEvent(actor_id=admin.id, document_id=None, event_type="user_updated"))
     db.commit()
     db.refresh(account)

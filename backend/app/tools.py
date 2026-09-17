@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .database import DocumentChunk, DocumentRecord, User
-from .rag import parse_allowed_roles
+from .access import can_access_document
 
 
 def normalise(text: str) -> str:
@@ -45,10 +45,11 @@ class Tool:
 
 
 def visible_documents(db: Session, user: User) -> list[DocumentRecord]:
+    """Uses the shared access rule: role *and* department, never a local copy."""
     return [
         document
         for document in db.scalars(select(DocumentRecord).where(DocumentRecord.is_current.is_(True))).all()
-        if user.role in parse_allowed_roles(document.allowed_roles)
+        if can_access_document(user, document)
     ]
 
 

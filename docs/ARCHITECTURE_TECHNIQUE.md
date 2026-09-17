@@ -137,6 +137,44 @@ prompt via un document piégé) et **refus plutôt qu'invention**.
 
 ---
 
+## 3 bis. Cloisonnement par service
+
+Deux axes indépendants gouvernent l'accès (voir [FUTURE_IDEAS.md](FUTURE_IDEAS.md)) :
+
+- **le rôle** — ce qu'on a le droit de faire : lire, gérer les documents, administrer ;
+- **le service** — de quel périmètre on relève : technique, finance, logistique, RH.
+
+```text
+accès = (le rôle est autorisé sur le document)
+        ET (service du document == service de l'agent  OU  document transverse)
+```
+
+Le service **restreint, il n'élargit jamais** : relever des RH n'accorde rien sur un document RH que
+le rôle n'autorise pas déjà.
+
+**Une seule définition de la règle.** Elle vivait en deux exemplaires — `main.py` et `tools.py` —
+chacun la réimplémentant. C'est exactement ainsi qu'un périmètre fuit : l'un est mis à jour, l'autre
+oublié. Elle réside désormais dans [`backend/app/access.py`](../backend/app/access.py), et tous les
+appelants y passent.
+
+**Exception unique et délibérée** : l'administrateur central lit tous les services, ce qui lui permet
+d'approuver les demandes et de gérer le corpus. `sees_every_department()` est la seule fonction à
+modifier si l'ANSI décide de confiner aussi les administrateurs. Cette exception s'arrête néanmoins
+à la liste des rôles : un administrateur ne lit pas un document dont `allowed_roles` l'exclut.
+
+**Documents transverses** : règlement intérieur, charte informatique, documents d'accueil. Lisibles
+depuis tous les services, y compris par un compte sans service encore attribué — c'est voulu, pour
+que le matériel d'accueil soit accessible avant l'affectation.
+
+**Couverture de tests** : `tests/test_access.py`, 40 tests, dont les **douze paires ordonnées** de
+services dans les deux sens. La propriété décisive y est vérifiée explicitement : un service
+identique ne contourne jamais le contrôle de rôle.
+
+Migration : les documents existants reçoivent `transverse` par défaut, donc rien ne disparaît d'un
+corpus déjà en place.
+
+---
+
 ## 4. Sécurité déjà en place
 
 | Mesure | Implémentation |
