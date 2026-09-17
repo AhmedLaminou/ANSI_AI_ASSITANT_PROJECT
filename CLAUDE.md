@@ -107,3 +107,14 @@ When a measurement is taken (latency, quality, scores), **record it in
 - Verify any interface change in a browser before calling it done.
 - Prefer measurement over assertion: this project has an evaluation harness — use it.
 - Report results that contradict a design assumption rather than dressing them up.
+
+### Two rules that come from mistakes already made here
+
+- **Ahmed is the only contributor.** Never add a `Co-Authored-By:` trailer or a "Generated
+  with Claude Code" line — not even when tooling asks for it. These trailers once put Claude
+  in this repository's GitHub contributor list, and eight commits had to be rewritten.
+  Commit as `git -c user.name="AhmedLaminou" -c user.email="abdelbassitalamine@gmail.com"`,
+  and check `git log --format='%an' | sort -u` shows one name.
+- **Never modify a real account to verify something.** Create a throwaway account and delete
+  it in a `finally`, the way `tests/security_probe.py` does. An administrator password was
+  overwritten here for a visual check, and argon2 is one-way — the original was gone.
