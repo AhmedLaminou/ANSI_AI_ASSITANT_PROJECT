@@ -121,6 +121,12 @@ simultanés, Ollama traitant les requêtes une par une.
 4. Dans une seconde fenêtre : `cd frontend; npm run dev`.
 5. Ouvrir `http://localhost:5173` et se connecter.
 
+Mot de passe oublié : il n'existe volontairement aucune procédure de réinitialisation
+par l'interface — l'assistant fonctionne hors ligne, il n'y a donc pas de relais de
+messagerie pour envoyer un lien, et un tel point d'entrée non authentifié serait une
+seconde porte. La remise à zéro se fait depuis la machine qui héberge la base :
+`cd backend; .\.venv\Scripts\python.exe -m app.reset_password`.
+
 ### Tests et évaluation
 
 Une seule fois : `cd backend; .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt`

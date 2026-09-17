@@ -35,6 +35,7 @@ From `backend/`:
 .\.venv\Scripts\python.exe -m tests.smoke_rag                # end to end, slow, needs Ollama
 .\.venv\Scripts\python.exe -m tests.evaluate                 # quality: accuracy, sources, refusals, latency
 .\.venv\Scripts\python.exe -m app.create_admin               # create an administrator
+.\.venv\Scripts\python.exe -m app.reset_password             # reset an account's password
 ```
 
 From `frontend/`: `npm run dev` for development — **never on a server**.
