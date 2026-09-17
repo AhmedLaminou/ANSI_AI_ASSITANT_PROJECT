@@ -24,9 +24,10 @@ et des tests de sécurité.
 | Conteneurisation, reverse proxy, supervision, sauvegardes | ❌ Rien |
 | Politique de rétention et de journalisation | ❌ À arbitrer — **bloquant** |
 | Tests d'injection de prompt et de fuite par les logs | ❌ Jamais exécutés |
-| Outils métier (interroger une base applicative) | ❌ Non implémenté |
+| Outils métier (répondre depuis la base, pas les documents) | ✅ Quatre outils, droits appliqués |
+| Agents spécialisés par département | ❌ À concevoir — voir [docs/FUTURE_IDEAS.md](docs/FUTURE_IDEAS.md) |
 
-Les trois derniers points sont détaillés dans
+Les points non traités sont détaillés dans
 [docs/ARCHITECTURE_TECHNIQUE.md](docs/ARCHITECTURE_TECHNIQUE.md) §8. Tant qu'ils ne sont pas traités,
 n'utiliser que des documents non sensibles ou anonymisés.
 
@@ -111,7 +112,9 @@ simultanés, Ollama traitant les requêtes une par une.
 
 1. Vérifier que les modèles sont présents : `ollama list` doit afficher `qwen3:4b` et `embeddinggemma`.
 2. Créer le compte administrateur : `cd backend; .\.venv\Scripts\python.exe -m app.create_admin`.
-3. Lancer l'API : `cd backend; .\.venv\Scripts\uvicorn.exe app.main:app --reload`.
+3. Lancer l'API : `cd backend; .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload`.
+   (Toujours la forme `python -m` : sous Windows, Smart App Control bloque les lanceurs
+   `.exe` générés par pip, qui ne sont pas signés.)
 4. Dans une seconde fenêtre : `cd frontend; npm run dev`.
 5. Ouvrir `http://localhost:5173` et se connecter.
 

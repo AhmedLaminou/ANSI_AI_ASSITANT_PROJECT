@@ -29,7 +29,7 @@ because AGPL would be a problem for an ANSI deployment (§24 of the design docum
 From `backend/`:
 
 ```powershell
-.\.venv\Scripts\uvicorn.exe app.main:app --reload            # API
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload   # API (voir note ci-dessous)
 .\.venv\Scripts\python.exe -m pytest tests/test_units.py -q  # fast, no Ollama needed
 .\.venv\Scripts\python.exe -m tests.smoke_rag                # end to end, slow, needs Ollama
 .\.venv\Scripts\python.exe -m tests.evaluate                 # quality: accuracy, sources, refusals, latency
@@ -37,6 +37,13 @@ From `backend/`:
 ```
 
 From `frontend/`: `npm run dev` for development — **never on a server**.
+
+**Always invoke tools as `python -m <tool>`, never the `.exe` shim in `Scripts/`.**
+Smart App Control is enforced on this machine and blocks pip-generated launchers
+(`uvicorn.exe`, `pytest.exe`...) as unsigned: *« Une stratégie de contrôle d'application a
+bloqué ce fichier »*. `python.exe` is signed and trusted, so the module form always works.
+Do not suggest disabling Smart App Control — turning it off is irreversible without a
+Windows reinstall, and it is a reasonable protection to keep.
 
 Optional PostgreSQL + pgvector: `docker start ansi-pgvector`, then set `DATABASE_URL`.
 
