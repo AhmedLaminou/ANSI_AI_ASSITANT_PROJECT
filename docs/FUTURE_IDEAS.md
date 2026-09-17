@@ -1,299 +1,307 @@
-# Departmental agents — design and implementation plan
+# Departmental agents — design and full implementation plan
 
-> Working note, written in English alongside the rest of the development notes.
-> The application itself and everything an ANSI user sees stay in French.
+> Working note in English, alongside the other development notes.
+> The application and everything an ANSI user sees stay in French.
 
-## Context
+## Context and goal
 
 ANSI — *Agence Nationale pour la Société de l'Information* — builds software and digital services
-for the State. The assistant's purpose is internal: help staff and interns find what internal
-documents actually say, instead of asking a colleague or hunting through a shared drive.
+for the State. The assistant is internal: it should let staff and interns find what internal
+documents actually say instead of asking a colleague or digging through a shared drive.
 
-Two recommendations came out of the internship review:
+Concrete target:
 
-1. **Specialised agents per department.**
-2. **The assistant must work without Internet.**
+- **Four departments**: technique/informatique, finance/comptabilité, logistique, ressources humaines.
+- **One central administrator** approves or refuses every access request.
+- **Each user has a role and a department**, and on login lands directly in their department's agent.
+- **An HR user must not reach Finance documents**, and so on.
+- Typical question: *"comment se passe une augmentation de salaire ?"* — an HR policy question,
+  answered from the HR corpus with the document and page cited.
 
-Plus a concrete target design: four departments, a central administrator who approves access, and a
-user who lands directly in their own department's agent.
-
----
-
-## 1. Offline operation — already achieved
-
-| Component | Where it runs |
-|---|---|
-| Generation model (`qwen3:4b`) | local Ollama, `127.0.0.1:11434` |
-| Embedding model (`embeddinggemma`) | local Ollama |
-| Vector index | local SQLite or PostgreSQL |
-| OCR (Tesseract) | local binary, subprocess |
-| Documents and history | local disk |
-
-No external AI API, no cloud service for embeddings or retrieval, no CDN required at runtime. The
-browser never talks to Ollama directly — everything goes through the backend, the only place where
-permissions are evaluated.
-
-**What remains is proving it in production, not writing code:**
-
-- **Actually cut outbound network.** The development machine has Internet, so nothing yet proves it
-  is unnecessary. The demonstration is in [TEST_PLAN.md](TEST_PLAN.md): unplug Wi-Fi and Ethernet,
-  ask a question, get a sourced answer.
-- **Deny-by-default egress** on the production server (§17 of the design document).
-- **Offline update procedure** (§25): download and verify models and packages on a connected
-  machine, check digests and licences, then transfer. The test that separates a genuinely offline
-  system from one that "works without Internet, except at startup": no installation step may require
-  outbound network.
-- **Carry the unversioned artefacts**: model weights, Tesseract language files
-  (`backend/data/tessdata/`), Python wheels, the compiled frontend.
-
-Full detail in [ARCHITECTURE_TECHNIQUE.md §5.7](ARCHITECTURE_TECHNIQUE.md).
+**Deployment target is ANSI servers, not a development laptop.** That distinction drives several
+choices below.
 
 ---
 
-## 2. Target design
+## 1. Sizing: what changes on real servers
 
-### The four departments
+Measurements taken on the development laptop — ~21 s for a trivial question, ~40 s for a full
+answer, 0.5 GB of free RAM — describe **that machine**, not the target. They should not constrain
+the design. On a properly sized server:
 
-| Department | Typical questions |
-|---|---|
-| **Technique / informatique** | development standards, environments, deployment procedures |
-| **Finance / comptabilité** | expense rules, purchase procedures, budget cycle |
-| **Logistique** | equipment, supplies, vehicles, premises |
-| **Ressources humaines** | leave, salary progression, contracts, internal policies |
-
-An HR user must not reach Finance documents, and so on.
-
-### What "specialised agent" should and should not mean
-
-It should **not** mean four models. Four departments would mean four model instances on a machine
-where one already saturates memory and a single answer takes ~40 s ([§5.11](ARCHITECTURE_TECHNIQUE.md)).
-That is the most expensive option and buys almost nothing.
-
-Specialisation that matters comes from **corpus, permissions, instructions and tools**:
-
-| Lever | Effect | Cost |
+| | Development laptop | ANSI server (target) |
 |---|---|---|
-| **Scoped corpus** | an HR agent only ever sees HR documents | low — the mechanism exists |
-| **Per-department system prompt** | right vocabulary, right refusals | very low |
-| **Per-department glossary** | HR acronyms are not technical acronyms | very low — mechanism exists |
-| **Per-department tools** | "how many leave days do I have left?" queries the HR system | medium |
-| **Per-department evaluation set** | detect when HR answers degrade | medium |
-| One model per department | close to nothing here | very high |
+| Inference | CPU, shared with IDE and browser | GPU |
+| Latency per answer | ~40 s | seconds |
+| Concurrent users | one, effectively | several, real |
+| Viable model | `qwen3:4b` | 8B–32B class |
+| Inference server | Ollama | Ollama, or **vLLM** for real concurrency (§14) |
+| Database | SQLite | PostgreSQL + pgvector |
 
-### What already exists and serves as the foundation
+Three consequences worth planning for:
 
-- **Filtering before retrieval.** Each document carries a list of allowed roles; an unauthorised
-  chunk is never a candidate. The partitioning machinery is in place — it is missing an axis.
-- **The decision graph** already routes between social, tool and documentary paths
-  ([§5.1](ARCHITECTURE_TECHNIQUE.md)). A departmental axis slots in without disturbing it.
-- **Business tools** ([§5.3](ARCHITECTURE_TECHNIQUE.md)): deterministic matching, declared roles,
-  caller's permissions applied, every invocation logged.
-- **The glossary** ([§5.3 ter](ARCHITECTURE_TECHNIQUE.md)), extensible without re-indexing.
+**A larger model becomes viable, and quality follows.** The measured ceiling today is extraction
+ability, not retrieval: on the evaluation set both models scored **12/12 on sources** while `qwen3:4b`
+scored 12/12 on answers and `qwen3:0.6b` only 2/12 ([§5.8](ARCHITECTURE_TECHNIQUE.md)). Retrieval is
+not the bottleneck — the generation model is. A bigger model on a GPU is the single largest quality
+lever available.
+
+**Concurrency stops being theoretical.** Ollama serves requests sequentially; with real simultaneous
+users that queues. This is where vLLM deserves the evaluation the design document already called for.
+
+**PostgreSQL + pgvector stops being optional.** Already implemented and verified at parity
+([§5.2](ARCHITECTURE_TECHNIQUE.md)); on a server with several writers, SQLite's single-writer lock is
+disqualifying.
+
+Sizing questions to answer with the infrastructure team: GPU model and VRAM, expected simultaneous
+users, corpus volume per department, backup and retention capacity.
 
 ---
 
-## 3. The central design point: role and department are two different axes
+## 2. Why still not four models
 
-This is the part that is easy to get wrong, and it is worth stating plainly.
+I previously argued this partly from laptop memory limits. That argument was weak and I withdraw it.
+The real reason stands on its own and has nothing to do with hardware:
 
-- **Role** says *what you may do*: read, manage documents, administer.
-- **Department** says *which perimeter you belong to*: technical, finance, logistics, HR.
+**Four copies of the same model are not four specialised agents.** Loading `qwen3:14b` four times
+yields four identical models. What makes an agent "HR" is the corpus it may read, the permissions
+applied, the vocabulary it understands and the tools it may call — none of which live in the weights.
+
+Genuinely different models per department would mean **fine-tuning** one per department: labelled
+training data for each, a training pipeline, per-model evaluation, and re-training whenever
+procedures change. That is a different project, an order of magnitude larger, and it would still not
+solve access control — the part that actually matters here.
+
+The defensible architecture is **one model, four agent configurations**:
+
+| Lever | What it produces | Cost |
+|---|---|---|
+| Scoped corpus | an HR agent only ever sees HR documents | low — mechanism exists |
+| Per-department system prompt | right vocabulary, right refusals | very low |
+| Per-department glossary | HR acronyms ≠ technical acronyms | very low — mechanism exists |
+| Per-department tools | "how many leave days left?" queries the HR system | medium |
+| Per-department evaluation | detect when HR answers degrade | medium |
+| A separate model per department | nothing that the above does not already give | very high |
+
+---
+
+## 3. The central design point: role and department are separate axes
+
+- **Role** = *what you may do*: read, manage documents, administer.
+- **Department** = *which perimeter you belong to*: technique, finance, logistique, RH.
 
 They are independent. An HR document manager and a technical document manager share a role and
-differ in perimeter. Today the project has a single axis — role — carrying both meanings at once.
+differ in perimeter. The project today has one axis — role — carrying both meanings.
 
 ```text
 users        role         admin | document_manager | user
-             department   technique | finance | logistique | rh        (single, per the target design)
+             department   technique | finance | logistique | rh
              status       pending | active | refused | suspended
 
 documents    allowed_roles   (unchanged)
              department      technique | finance | logistique | rh | transverse
 
-access = (the user's role is allowed on the document)
-         AND (document.department == user.department  OR  document.department == "transverse")
+access = (role allowed on the document)
+         AND (document.department == user.department OR document.department == "transverse")
 ```
 
-The `AND` matters: **department restricts, never widens.** An HR user gains no right over an HR
-document that their role does not already permit.
+**Department restricts; it never widens.** An HR user gains no right over an HR document their role
+does not already permit.
 
 ### A trap already in the code
 
 `classification` ("interne", "direction", "confidentiel") is **decorative** — only `allowed_roles`
-enforces anything. A document labelled "confidentiel" with every role ticked is readable by
-everyone. When departments arrive, the same mistake must not be repeated: `department` has to be
-enforced in the query, not merely displayed.
+enforces anything. A document labelled "confidentiel" with every role ticked is readable by all.
+`department` must not repeat that mistake: it has to be enforced **in the retrieval query**, not
+merely displayed.
 
 ---
 
-## 4. Access requests approved by a central administrator
+## 4. Implementation plan
 
-The target design adds something the project does not have: a user signs up, and an administrator
-grants or refuses access.
+Six phases. Each is useful alone and testable before the next.
 
-### Account lifecycle
+### Phase A — Perimeter (the foundation)
 
-```text
-sign-up ──► pending ──► [administrator decides]
-                          ├── grants role + department ──► active
-                          └── refuses ─────────────────► refused
+**Schema** (`backend/app/database.py`)
 
-active ──► suspended (departure, incident)
-```
+- `documents.department` — string, indexed, default `"transverse"`.
+- `users.department` — string, nullable (a pending account has none).
+- `users.status` — `pending | active | refused | suspended`, default `active` for existing rows.
+- Extend `ensure_schema()`; it already performs additive column migration on both engines.
+- No re-indexing: metadata only, embeddings untouched.
 
-### What this requires
+**Enforcement** (`backend/app/main.py`)
 
-**A public registration endpoint** — the only unauthenticated write endpoint in the application, so
-it needs care: strict rate limiting per source address, no information disclosure (never reveal
-whether a username already exists), and a request creates a `pending` account with **no role and no
-department** — it can read nothing.
+- `can_access_document()` gains the department condition next to the role check.
+- Every retrieval path must use it: `/chat`, `/chat/stream`, `/search`, `/documents`,
+  `/documents/{id}/preview`, and the `visible_documents()` helper in `tools.py`.
+- The graph's injected `retrieve` already applies ACL, so reformulation inherits the restriction —
+  but that must be **tested**, not assumed.
 
-**An administrator review screen** — pending requests with requested department, approve with a
-role and department, or refuse with a reason.
+**API**
 
-**Login refuses anything but `active`.** The existing check is `is_active`; it becomes a status
-check. A `pending` user who logs in sees "your request is awaiting approval", not a corpus.
+- `POST /documents/upload` — accept `department`.
+- `GET /documents` — filter by the caller's department; an optional `department` parameter for
+  admins only.
 
-**Everything journalised**: request, approval, refusal, suspension. The audit table already exists.
+**Interface** (`frontend/src/App.jsx`)
 
-### Why this matters beyond convenience
+- Department selector in the upload form; department badge on document cards.
+- The connected user's department shown in the sidebar, so the perimeter is never ambiguous.
 
-It changes the security posture. Today an administrator creates every account by hand, which is
-laborious but airtight. A public registration endpoint is an attack surface: it must not become a
-way to enumerate usernames, flood the database, or obtain a perimeter by asking nicely. The safe
-default is that approval grants **both** role and department explicitly — never inherited from what
-the applicant claimed.
+**Tests — the most important of the whole feature**
 
----
+- A user of department A never retrieves a chunk from department B, **including after a query
+  reformulation**.
+- A `transverse` document is reachable from every department.
+- Department restricts but never widens: an HR user is still refused an HR document whose
+  `allowed_roles` excludes their role.
+- `tools.py` counts respect the department.
 
-## 5. How the assistant knows which department a question belongs to
+### Phase B — Registration and approval
 
-Three options, in order of preference:
+**Schema**: reuse `users.status`; add `users.requested_department` and `users.request_reason`.
 
-1. **The user's own department, implicitly** (recommended). A user belongs to one department; their
-   agent is that department's agent. Nothing to choose, nothing to classify. Matches the target
-   design exactly: "upon logging in, a user connects to the agent they are supposed to".
-2. **An explicit selector** for the few users with cross-department access (a director, an
-   administrator). Deterministic, instant, auditable.
-3. **Automatic classification by the model.** Tempting, but it adds a model call — tens of seconds —
-   and introduces a non-deterministic decision on an axis that governs document perimeter. Avoid it
-   while options 1 and 2 suffice.
+**Endpoints**
 
-This mirrors a choice already made for tools: **the model never decides anything that touches
-permissions.** Deterministic matching does.
+| Endpoint | Purpose | Auth |
+|---|---|---|
+| `POST /auth/register` | create a `pending` account | **none** |
+| `GET /admin/registrations` | list pending requests | admin |
+| `POST /admin/registrations/{id}/approve` | grant role + department | admin |
+| `POST /admin/registrations/{id}/refuse` | refuse with a reason | admin |
 
----
+**This is the application's first unauthenticated write endpoint**, so it needs care:
 
-## 6. Implementation plan
+- Rate limit per source address — the sliding-window limiter already exists, reuse it.
+- **No information disclosure**: the response is identical whether or not the username exists.
+  Otherwise registration becomes a username enumeration oracle.
+- A `pending` account has **no role and no department** — it can read nothing.
+- Approval grants role and department **chosen by the administrator**, never inherited from what the
+  applicant requested. `requested_department` is a hint, not an instruction.
+- Login rejects any status but `active`, distinguishing "awaiting approval" from "refused" only to
+  an authenticated-enough caller.
+- Journalise request, approval, refusal, suspension — the audit table exists.
 
-Ordered so each step is useful on its own and testable before the next.
+**Tests**: a pending account reads nothing; approval grants exactly what the admin chose; a refused
+account cannot log in; registration does not reveal existing usernames.
 
-### Step 1 — the perimeter (the bulk of the value)
+### Phase C — The voice of each agent
 
-- Add `department` to `documents` and to `users`; add `status` to `users`.
-- Extend `ensure_schema()` — the additive migration already handles new columns.
-- Enforce the department in the retrieval filter, next to the existing role check.
-- Add the department selector to the upload form, and a department badge in the document list.
-- **Tests**: a user of department A must never retrieve a chunk from department B, including after
-  a query reformulation. This is the single most important test of the whole feature.
+- A per-department system prompt appended to the shared one (`SYSTEM_MESSAGE` in `main.py`).
+- Keep every shared guardrail: answer only from the extracts, treat extracts as untrusted data,
+  refuse rather than invent, cite sources.
+- Per-department additions: vocabulary, tone, and what is out of scope — an HR user should not
+  receive firewall configuration advice.
+- The welcome screen already lists the queryable corpus; it should name the department too.
 
-No re-indexing required: only metadata changes, embeddings are untouched.
+### Phase D — Vocabulary
 
-### Step 2 — registration and approval
+- Split `backend/data/glossary.json` per department; keep a shared section.
+- Mind the trap already hit: two-letter acronyms collide with ordinary French words ("SI" vs "si"),
+  so below three characters the acronym must be capitalised. The same acronym may mean different
+  things in different departments — itself an argument for separate glossaries.
 
-- `POST /auth/register` — creates a `pending` account, rate-limited, no information disclosure.
-- `GET /admin/registrations`, `POST /admin/registrations/{id}` — approve with role and department,
-  or refuse.
-- Login rejects any status other than `active`, with a message that distinguishes "awaiting
-  approval" from "refused" without leaking whether an account exists to an anonymous caller.
-- **Tests**: a pending account can read nothing; approval grants exactly what the administrator
-  chose, never what the applicant requested.
+### Phase E — Tools and access to ANSI data
 
-### Step 3 — the voice
+This is where departments earn their keep, and where "agents" stop being document search.
 
-- A per-department system prompt appended to the shared one. HR vocabulary is not technical
-  vocabulary, and what should be refused differs: an HR user should not receive firewall
-  configuration advice.
-- Keep the shared guardrails intact: answer only from the extracts, treat extracts as untrusted
-  data, refuse rather than invent.
+| Department | Candidate tools | Source |
+|---|---|---|
+| RH | leave balance, grade and seniority, holiday calendar | SIRH |
+| Finance | budget line status, expense-claim state | accounting system |
+| Logistique | equipment inventory, stock, vehicle booking | inventory system |
+| Technique | environment status, deployment history, on-call rota | internal APIs |
 
-### Step 4 — the vocabulary
+Each tool keeps the contract already established in `tools.py` and §18 of the design document:
 
-- Split the glossary per department. The mechanism exists; it needs a key.
-- Mind the trap already hit: a two-letter acronym collides with an ordinary French word ("SI" versus
-  "si"), and the same acronym can mean different things in different departments — which is itself
-  an argument for separate glossaries.
+- a fixed function, **no parameter taken from the question** — a crafted question cannot alter a query;
+- declared roles **and** declared department;
+- the caller's permissions applied inside the tool;
+- every invocation journalised;
+- **never free-form SQL and never shell access** for the model.
 
-### Step 5 — the tools
+**Orchestration**: the LangGraph router already dispatches social / tool / documentary. Adding
+departmental tools means registering them with a department and extending the deterministic matcher —
+no architectural change.
 
-This is where departments earn their keep. "How many leave days do I have left?" belongs to the HR
-system; "what is the state of the equipment pool?" to logistics.
+**On LangChain**: not needed. `langchain-core` is already present as a LangGraph dependency; the
+project calls Ollama directly in about sixty lines of `httpx`. Full LangChain would add chains,
+agents and retrievers the project never uses, enlarging the dependency surface with no capability
+gain — a poor trade for a system that must be auditable and transferable offline. LangGraph earns its
+place because the flow genuinely branches; LangChain would not.
 
-Each tool keeps the current contract ([§18](../architecture_agent_ia_offline_ANSI.md)): a fixed
-function, no parameter taken from the question, the caller's permissions applied, every invocation
-logged, and a declared department as well as declared roles.
+### Phase F — Production platform
 
-**On LangChain**: not needed. `langchain-core` is already present as a LangGraph dependency, and the
-project calls Ollama directly in about sixty lines of `httpx`. Adding full LangChain would bring
-chains, agents and retrievers the project never uses, enlarging the dependency surface for no
-capability — a poor trade for a system that must be auditable and transferable offline.
+- Compiled frontend served by nginx; **never `npm run dev` on a server**.
+- HTTPS, `COOKIE_SECURE=true`, one explicit CORS origin.
+- PostgreSQL + pgvector, backed up and restore-tested.
+- Secrets injected by the system, not sitting in `.env`.
+- GPU inference; evaluate vLLM against Ollama under real concurrency.
+- Deny-by-default outbound firewall.
+- Supervision: availability, latency, refusal rate, errors.
+- **Offline update procedure** (§25): fetch and verify models and packages on a connected machine,
+  check digests and licences, transfer. No install step may require outbound network.
+- Carry the unversioned artefacts: model weights, Tesseract language files, wheels, built frontend.
 
-### Step 6 — the measurement
+### Phase G — Measurement, continuous from Phase A
 
-- An evaluation set per department. Without it, improving technical answers can silently degrade HR
+- An evaluation set **per department**, otherwise improving technical answers can silently degrade HR
   answers.
-- Group the existing user feedback ([§5.13](ARCHITECTURE_TECHNIQUE.md)) by department to see where
+- Group existing user feedback ([§5.13](ARCHITECTURE_TECHNIQUE.md)) by department to see where
   quality slips first.
+- Re-run `tests.evaluate` after every model, chunking or threshold change.
 
 ---
 
-## 7. Complementary ideas that follow from the split
+## 5. Security work that grows with departments
 
-**A referent per document.** Who to contact when a procedure is expired or ambiguous? Combined with
-validity dates ([§5.12](ARCHITECTURE_TECHNIQUE.md)), a refusal becomes an action: "this procedure
-expired on 30/06/2026 — referent: ressources humaines".
+**Prompt-injection tests — still missing, now more important.** Partitioning raises the stakes: a
+crafted document placed in one department must not be able to make the assistant reveal another's
+content. The defence exists (extracts declared untrusted in the system prompt); it has never been
+tested ([§6.1](ARCHITECTURE_TECHNIQUE.md)).
 
-**A "who should I ask" answer.** When nothing is found inside the user's perimeter, name the
-department that probably holds the information instead of stopping at a refusal. Useful precisely
-because partitioning prevents seeing beyond one's own scope.
+**Cross-department leakage tests.** The systematic version of the Phase A test: for every pair of
+departments, confirm no path — chat, stream, search, preview, tools, reformulation — returns the
+other's content.
 
-**Bulk import.** Importing several hundred documents one at a time through the interface is not
-realistic. A folder import, with department and roles inferred from the directory tree, is needed
-before any real deployment.
+**Session invalidation.** Changing a user's department must take effect immediately. Authorisation
+already reads role from the database on each request rather than from the token, so department should
+follow the same rule — never trust a claim carried in the JWT.
 
-**Per-department statistics.** The existing tools count within the caller's perimeter; an
-administrator needs the per-department view to know which corpus is covered and which is not.
-
-**An onboarding corpus for interns.** The stated goal is helping interns. Their questions are
-predictable — how leave works, who to contact, which tools to install, what the code conventions
-are. A small, deliberately curated "accueil" corpus marked `transverse` would deliver visible value
-quickly, and makes a far better demonstration than a general document dump.
+**Retention policy.** Still unsettled, still the blocker before any real data, whatever the
+departmental split.
 
 ---
 
-## 8. Decisions needed before writing code
-
-These belong to ANSI, not to the code:
+## 6. Decisions that belong to ANSI, not to the code
 
 1. **Can a user belong to several departments?** The target design says one. If a director needs
    cross-department reading, that is a second mechanism, not a wider single department.
-2. **What happens to cross-cutting documents** (règlement intérieur, charte informatique)? The
-   `transverse` department above is a proposal, not a decision.
-3. **Who approves requests?** A single central administrator is the stated design. At scale, a
-   per-department approver may be needed — which is a different permission model.
-4. **The retention policy**, still unsettled. It remains the blocker before any real data, whatever
-   the departmental split.
+2. **What is `transverse`?** Règlement intérieur, charte informatique, onboarding material — the
+   proposal above, not a decision.
+3. **Who approves?** One central administrator is the stated design; at scale a per-department
+   approver is a different permission model.
+4. **Retention duration**, and what must never be journalised.
+5. **Which internal systems may be queried** by tools, with what credentials and what minimum rights.
 
 ---
 
-## 9. Suggested order of work
+## 7. Suggested order of work
 
-1. Step 1 (perimeter) — largest value, no model involvement, fully testable.
-2. The **prompt-injection test suite**, still missing and still the most conspicuous gap
-   ([§6.1](ARCHITECTURE_TECHNIQUE.md)). Partitioning by department makes it more important, not
-   less: a crafted document must not be able to make the assistant reveal another department's
-   content.
-3. Step 2 (registration and approval).
-4. Steps 3 and 4 (prompt and glossary) — cheap, visible improvement.
-5. Step 5 (tools), once a real internal API is available to call.
-6. Step 6 (measurement), continuously from step 1 onward.
+1. **Phase A** — perimeter. Largest value, no model involvement, fully testable.
+2. **Prompt-injection and cross-department leakage suite** — before any real document is loaded.
+3. **Phase B** — registration and approval.
+4. **Phases C and D** — prompts and glossaries. Cheap, visible improvement.
+5. **Phase F platform decisions** — GPU, model size, vLLM, PostgreSQL. Settle the model early,
+   since it is the main quality lever and it changes what everything else is measured against.
+6. **Phase E** — tools, once an internal API is actually available.
+7. **Phase G** — continuously from step 1.
+
+### One suggestion for early visible value
+
+The stated audience is interns, and their questions are predictable: how leave works, who to
+contact, which tools to install, what the code conventions are. A small curated **onboarding corpus**
+marked `transverse` would demonstrate the assistant's value immediately, to the people it is meant
+for, and makes a far better demonstration than a bulk document dump.

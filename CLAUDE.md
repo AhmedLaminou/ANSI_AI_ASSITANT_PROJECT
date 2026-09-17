@@ -50,9 +50,11 @@ Optional PostgreSQL + pgvector: `docker start ansi-pgvector`, then set `DATABASE
 
 ## Known traps (measured, not assumed)
 
-- **Hardware is the limiting factor.** A trivial question takes ~21 s; a full answer ~40 s, of which
-  ~90% is generation. That is not a bug. Before concluding "the model is unavailable", check free RAM
-  and `CHAT_TIMEOUT_SECONDS`.
+- **This laptop is slow; the target is not.** A trivial question takes ~21 s here and a full answer
+  ~40 s, ~90% of it generation, on a CPU sharing 16 GB with the IDE and browser. Before concluding
+  "the model is unavailable", check free RAM and `CHAT_TIMEOUT_SECONDS`. **Do not treat these numbers
+  as a design constraint**: deployment is on ANSI servers with a GPU, where a larger model becomes
+  the main quality lever. Measurements describe this machine, not the target.
 - **`qwen3:4b` emits its reasoning inside `content`** despite `think: false`, terminated by
   `</think>`. `extract_answer()` strips it and the stream hides it. Do not "simplify" that code.
 - **The `0.18` similarity threshold separates nothing.** Measured: a question with no answer scored
