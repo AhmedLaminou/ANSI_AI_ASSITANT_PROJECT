@@ -24,7 +24,7 @@ GLOSSARY_PATH = BACKEND_DIR / "data" / "glossary.json"
 # Deliberately small and generic. Real ANSI terminology belongs in glossary.json,
 # which is not versioned: it may itself reveal internal organisation.
 DEFAULT_GLOSSARY: dict[str, str] = {
-    "ANSI": "Agence Nationale pour la Sécurité des Systèmes d'Information",
+    "ANSI": "Agence Nationale pour la Société de l'Information",
     "DSI": "direction des systèmes d'information",
     "RH": "ressources humaines",
     "SI": "système d'information",

@@ -1,178 +1,299 @@
-# Pistes d'évolution — recommandations du tuteur de stage
+# Departmental agents — design and implementation plan
 
-Deux recommandations ont été formulées lors du point de stage :
+> Working note, written in English alongside the rest of the development notes.
+> The application itself and everything an ANSI user sees stay in French.
 
-1. **Des agents spécialisés par département** (RH, technique, finances…).
-2. **L'assistant doit fonctionner sans Internet.**
+## Context
 
-Ce document examine les deux : ce qui existe déjà, ce que cela demanderait réellement, et les
-pistes qui en découlent.
+ANSI — *Agence Nationale pour la Société de l'Information* — builds software and digital services
+for the State. The assistant's purpose is internal: help staff and interns find what internal
+documents actually say, instead of asking a colleague or hunting through a shared drive.
+
+Two recommendations came out of the internship review:
+
+1. **Specialised agents per department.**
+2. **The assistant must work without Internet.**
+
+Plus a concrete target design: four departments, a central administrator who approves access, and a
+user who lands directly in their own department's agent.
 
 ---
 
-## 1. Fonctionner sans Internet — déjà acquis
+## 1. Offline operation — already achieved
 
-C'est la raison d'être du projet depuis le départ, et c'est vérifiable :
-
-| Composant | Où il s'exécute |
+| Component | Where it runs |
 |---|---|
-| Modèle de génération (`qwen3:4b`) | Ollama local, `127.0.0.1:11434` |
-| Modèle d'embeddings (`embeddinggemma`) | Ollama local |
-| Index vectoriel | SQLite ou PostgreSQL local |
-| OCR (Tesseract) | binaire local, sous-processus |
-| Documents et historique | disque local |
+| Generation model (`qwen3:4b`) | local Ollama, `127.0.0.1:11434` |
+| Embedding model (`embeddinggemma`) | local Ollama |
+| Vector index | local SQLite or PostgreSQL |
+| OCR (Tesseract) | local binary, subprocess |
+| Documents and history | local disk |
 
-Aucune API d'IA externe, aucun service cloud pour les embeddings ou le RAG, aucun CDN requis à
-l'exécution. Le navigateur ne parle jamais directement à Ollama : tout passe par le backend, seul
-endroit où les droits sont évalués.
+No external AI API, no cloud service for embeddings or retrieval, no CDN required at runtime. The
+browser never talks to Ollama directly — everything goes through the backend, the only place where
+permissions are evaluated.
 
-**Ce qui reste à faire pour que ce soit vrai *en production*, pas seulement en développement :**
+**What remains is proving it in production, not writing code:**
 
-- **Couper réellement le réseau sortant.** Aujourd'hui le poste de développement a Internet ; rien
-  ne le prouve inutile. La démonstration attendue est celle du [TEST_PLAN.md](TEST_PLAN.md) :
-  débrancher Wi-Fi et Ethernet, puis poser une question et obtenir une réponse sourcée.
-- **Politique `deny by default` en sortie** sur le serveur de production (§17 du document de
-  conception).
-- **Procédure de mise à jour hors ligne** (§25) : télécharger et vérifier modèles et paquets dans un
-  environnement connecté, contrôler empreintes et licences, puis transférer. Le critère qui distingue
-  un système réellement hors ligne d'un système « qui marche sans Internet, sauf au démarrage » :
-  aucune étape d'installation ne doit exiger un accès réseau sortant.
-- **Transporter les artefacts non versionnés** : poids des modèles, fichiers de langue Tesseract
-  (`backend/data/tessdata/`), paquets Python, frontend compilé.
+- **Actually cut outbound network.** The development machine has Internet, so nothing yet proves it
+  is unnecessary. The demonstration is in [TEST_PLAN.md](TEST_PLAN.md): unplug Wi-Fi and Ethernet,
+  ask a question, get a sourced answer.
+- **Deny-by-default egress** on the production server (§17 of the design document).
+- **Offline update procedure** (§25): download and verify models and packages on a connected
+  machine, check digests and licences, then transfer. The test that separates a genuinely offline
+  system from one that "works without Internet, except at startup": no installation step may require
+  outbound network.
+- **Carry the unversioned artefacts**: model weights, Tesseract language files
+  (`backend/data/tessdata/`), Python wheels, the compiled frontend.
 
-Détail complet dans [ARCHITECTURE_TECHNIQUE.md §5.7](ARCHITECTURE_TECHNIQUE.md).
+Full detail in [ARCHITECTURE_TECHNIQUE.md §5.7](ARCHITECTURE_TECHNIQUE.md).
 
 ---
 
-## 2. Des agents spécialisés par département
+## 2. Target design
 
-### Ce que « agent spécialisé » ne devrait pas vouloir dire
+### The four departments
 
-Le mot « agent » laisse souvent entendre *un modèle par département*. Ce serait le plus coûteux et
-le moins utile des choix : quatre départements signifieraient quatre modèles à charger, sur une
-machine où un seul modèle consomme déjà l'essentiel de la mémoire et où une réponse demande ~40 s
-(§5.11). La spécialisation utile ne vient pas du modèle — elle vient **du corpus, des droits et des
-consignes**.
+| Department | Typical questions |
+|---|---|
+| **Technique / informatique** | development standards, environments, deployment procedures |
+| **Finance / comptabilité** | expense rules, purchase procedures, budget cycle |
+| **Logistique** | equipment, supplies, vehicles, premises |
+| **Ressources humaines** | leave, salary progression, contracts, internal policies |
 
-### Ce que la spécialisation apporte réellement
+An HR user must not reach Finance documents, and so on.
 
-| Levier | Effet | Coût |
+### What "specialised agent" should and should not mean
+
+It should **not** mean four models. Four departments would mean four model instances on a machine
+where one already saturates memory and a single answer takes ~40 s ([§5.11](ARCHITECTURE_TECHNIQUE.md)).
+That is the most expensive option and buys almost nothing.
+
+Specialisation that matters comes from **corpus, permissions, instructions and tools**:
+
+| Lever | Effect | Cost |
 |---|---|---|
-| **Cloisonner le corpus** | un agent RH ne voit que les documents RH | faible, la structure existe |
-| **Consigne système par département** | vocabulaire et ton adaptés, ce qu'il faut refuser | très faible |
-| **Glossaire par département** | les sigles RH ne sont pas les sigles techniques | très faible, mécanisme déjà là |
-| **Outils par département** | « combien de congés restants ? » interroge le SIRH | moyen, dépend des API internes |
-| **Jeu d'évaluation par département** | savoir si les réponses RH se dégradent | moyen |
-| Un modèle par département | quasi nul ici | très élevé |
+| **Scoped corpus** | an HR agent only ever sees HR documents | low — the mechanism exists |
+| **Per-department system prompt** | right vocabulary, right refusals | very low |
+| **Per-department glossary** | HR acronyms are not technical acronyms | very low — mechanism exists |
+| **Per-department tools** | "how many leave days do I have left?" queries the HR system | medium |
+| **Per-department evaluation set** | detect when HR answers degrade | medium |
+| One model per department | close to nothing here | very high |
 
-### Ce qui existe déjà et sert de fondation
+### What already exists and serves as the foundation
 
-- **Le filtrage avant recherche.** Chaque document porte une liste de rôles ; un extrait non autorisé
-  n'est jamais candidat. Le mécanisme de cloisonnement est en place — il manque le bon axe.
-- **Le graphe de décision.** Un routeur existe déjà et dispatche entre social, outil et documentaire
-  (§5.1). Ajouter un axe départemental s'y insère sans rien remettre en cause.
-- **Les outils métier** (§5.3), déterministes, avec rôles déclarés et droits de l'appelant appliqués.
-- **Le glossaire** (§5.3 ter), extensible sans réindexer.
+- **Filtering before retrieval.** Each document carries a list of allowed roles; an unauthorised
+  chunk is never a candidate. The partitioning machinery is in place — it is missing an axis.
+- **The decision graph** already routes between social, tool and documentary paths
+  ([§5.1](ARCHITECTURE_TECHNIQUE.md)). A departmental axis slots in without disturbing it.
+- **Business tools** ([§5.3](ARCHITECTURE_TECHNIQUE.md)): deterministic matching, declared roles,
+  caller's permissions applied, every invocation logged.
+- **The glossary** ([§5.3 ter](ARCHITECTURE_TECHNIQUE.md)), extensible without re-indexing.
 
-### Le vrai travail : séparer deux axes qui sont aujourd'hui confondus
+---
 
-C'est le point de conception central, et il est facile à manquer.
+## 3. The central design point: role and department are two different axes
 
-- **Le rôle** dit *ce qu'on a le droit de faire* : lire, gérer les documents, administrer.
-- **Le département** dit *de quel périmètre on relève* : RH, technique, finances.
+This is the part that is easy to get wrong, and it is worth stating plainly.
 
-Ce sont deux axes indépendants. Un gestionnaire documentaire RH et un gestionnaire documentaire
-technique ont le même rôle et des périmètres différents. Un directeur peut avoir besoin d'un accès
-transverse. Aujourd'hui le projet n'a qu'un seul axe — le rôle — et il porte les deux sens à la fois.
+- **Role** says *what you may do*: read, manage documents, administer.
+- **Department** says *which perimeter you belong to*: technical, finance, logistics, HR.
 
-Modèle de données proposé :
+They are independent. An HR document manager and a technical document manager share a role and
+differ in perimeter. Today the project has a single axis — role — carrying both meanings at once.
 
 ```text
-users        : role (admin | document_manager | user)
-             + departments[]        (un agent peut relever de plusieurs)
+users        role         admin | document_manager | user
+             department   technique | finance | logistique | rh        (single, per the target design)
+             status       pending | active | refused | suspended
 
-documents    : allowed_roles        (existant, inchangé)
-             + department           (RH | technique | finances | transverse)
+documents    allowed_roles   (unchanged)
+             department      technique | finance | logistique | rh | transverse
 
-accès = (le rôle de l'agent est autorisé sur le document)
-        ET (le département du document ∈ départements de l'agent  OU  document transverse)
+access = (the user's role is allowed on the document)
+         AND (document.department == user.department  OR  document.department == "transverse")
 ```
 
-Le `ET` est important : le département **restreint** l'accès, il ne l'élargit jamais. Un agent RH ne
-gagne aucun droit sur un document RH qui ne l'autorise pas par son rôle.
+The `AND` matters: **department restricts, never widens.** An HR user gains no right over an HR
+document that their role does not already permit.
 
-### Comment savoir de quel département relève une question ?
+### A trap already in the code
 
-Trois approches, par ordre de préférence :
-
-1. **Sélecteur explicite dans l'interface** (recommandé). L'agent choisit « RH », « technique » ou
-   « tous mes départements ». Déterministe, instantané, auditable, aucun coût de latence. Cohérent
-   avec le choix déjà fait pour les outils : le modèle ne décide pas ce qui touche aux droits.
-2. **Tout chercher dans le périmètre autorisé** (comportement actuel), en laissant la pertinence
-   trancher. Simple, mais devient bruyant quand le corpus grandit.
-3. **Classification automatique par le modèle.** Séduisant, mais ajoute un appel au modèle — donc des
-   dizaines de secondes — et introduit une décision non déterministe sur un axe qui touche au
-   périmètre documentaire. À éviter tant que le point 1 suffit.
-
-### Mise en œuvre progressive
-
-**Étape 1 — le périmètre.** Ajouter `department` aux documents et `departments[]` aux comptes,
-étendre le filtrage ACL, ajouter le sélecteur dans l'interface. C'est l'essentiel de la valeur et
-cela ne touche pas au modèle. Aucun réindexage nécessaire.
-
-**Étape 2 — la voix.** Une consigne système par département, en plus de la consigne commune : le
-vocabulaire RH n'est pas le vocabulaire technique, et ce qu'il faut refuser diffère (un agent RH ne
-doit pas se voir répondre sur la configuration d'un pare-feu).
-
-**Étape 3 — le vocabulaire.** Un glossaire par département. Le mécanisme existe ; il suffit de le
-découper. Attention au piège déjà rencontré : un sigle de deux lettres entre en collision avec un mot
-courant (« SI » contre « si »), et le même sigle peut vouloir dire deux choses selon le département —
-raison de plus pour que les glossaires soient séparés.
-
-**Étape 4 — les outils.** C'est là que les départements prennent tout leur sens : « combien de jours
-de congés me reste-t-il ? » relève du SIRH, « quel est l'état du parc ? » de l'inventaire technique.
-Chaque outil doit rester ce qu'ils sont aujourd'hui : fonction fixe, aucun paramètre issu de la
-question, droits de l'appelant appliqués, invocation journalisée (§18).
-
-**Étape 5 — la mesure.** Un jeu d'évaluation par département. Sans cela, une amélioration côté
-technique peut dégrader les réponses RH sans que personne ne s'en aperçoive.
+`classification` ("interne", "direction", "confidentiel") is **decorative** — only `allowed_roles`
+enforces anything. A document labelled "confidentiel" with every role ticked is readable by
+everyone. When departments arrive, the same mistake must not be repeated: `department` has to be
+enforced in the query, not merely displayed.
 
 ---
 
-## 3. Pistes complémentaires, non demandées mais cohérentes
+## 4. Access requests approved by a central administrator
 
-Elles découlent du découpage par département et méritent d'être discutées au même moment.
+The target design adds something the project does not have: a user signs up, and an administrator
+grants or refuses access.
 
-**Un référent par document.** Qui contacter quand une procédure est périmée ou ambiguë ? Associé aux
-dates de validité (§5.12), cela transforme un refus en action : « cette procédure a expiré le
-30/06/2026 — référent : direction des ressources humaines ».
+### Account lifecycle
 
-**Une réponse « qui interroger ».** Quand rien n'est trouvé dans le périmètre de l'agent, indiquer
-le département qui détient probablement l'information plutôt que de s'arrêter à un refus. Utile
-précisément parce que le cloisonnement empêche de voir au-delà de son périmètre.
+```text
+sign-up ──► pending ──► [administrator decides]
+                          ├── grants role + department ──► active
+                          └── refuses ─────────────────► refused
 
-**Import en lot.** Importer 500 documents un par un via l'interface n'est pas réaliste. Un import
-par dossier, avec département et rôles déduits de l'arborescence, est nécessaire avant tout
-déploiement réel.
+active ──► suspended (departure, incident)
+```
 
-**Statistiques par département.** Les outils existants comptent sur le périmètre de l'appelant ;
-un administrateur a besoin de la vue par département pour savoir quel fonds est couvert et lequel ne
-l'est pas.
+### What this requires
 
-**Tableau de bord des retours.** Le mécanisme de retour utilisateur (§5.13) collecte déjà les
-signalements ; les regrouper par département indiquerait où la qualité décroche en premier.
+**A public registration endpoint** — the only unauthenticated write endpoint in the application, so
+it needs care: strict rate limiting per source address, no information disclosure (never reveal
+whether a username already exists), and a request creates a `pending` account with **no role and no
+department** — it can read nothing.
+
+**An administrator review screen** — pending requests with requested department, approve with a
+role and department, or refuse with a reason.
+
+**Login refuses anything but `active`.** The existing check is `is_active`; it becomes a status
+check. A `pending` user who logs in sees "your request is awaiting approval", not a corpus.
+
+**Everything journalised**: request, approval, refusal, suspension. The audit table already exists.
+
+### Why this matters beyond convenience
+
+It changes the security posture. Today an administrator creates every account by hand, which is
+laborious but airtight. A public registration endpoint is an attack surface: it must not become a
+way to enumerate usernames, flood the database, or obtain a perimeter by asking nicely. The safe
+default is that approval grants **both** role and department explicitly — never inherited from what
+the applicant claimed.
 
 ---
 
-## 4. Ce qu'il faut trancher avant de commencer
+## 5. How the assistant knows which department a question belongs to
 
-1. **La liste des départements** et leur granularité. Trop fine, elle multiplie les cloisons et les
-   questions sans réponse ; trop grossière, elle ne sépare rien.
-2. **Le statut des documents transverses** (règlement intérieur, charte informatique) : visibles de
-   tous, ou rattachés à un département propriétaire avec lecture élargie ?
-3. **Les accès transverses** : qui peut interroger plusieurs départements, et selon quelle règle ?
-4. **La politique de rétention**, toujours non arbitrée : elle reste le point bloquant avant toute
-   donnée réelle, quel que soit le découpage retenu.
+Three options, in order of preference:
 
-Les points 1 à 3 sont des décisions d'organisation, pas des choix techniques : ils appartiennent à
-l'ANSI, et le code doit s'y conformer — pas l'inverse.
+1. **The user's own department, implicitly** (recommended). A user belongs to one department; their
+   agent is that department's agent. Nothing to choose, nothing to classify. Matches the target
+   design exactly: "upon logging in, a user connects to the agent they are supposed to".
+2. **An explicit selector** for the few users with cross-department access (a director, an
+   administrator). Deterministic, instant, auditable.
+3. **Automatic classification by the model.** Tempting, but it adds a model call — tens of seconds —
+   and introduces a non-deterministic decision on an axis that governs document perimeter. Avoid it
+   while options 1 and 2 suffice.
+
+This mirrors a choice already made for tools: **the model never decides anything that touches
+permissions.** Deterministic matching does.
+
+---
+
+## 6. Implementation plan
+
+Ordered so each step is useful on its own and testable before the next.
+
+### Step 1 — the perimeter (the bulk of the value)
+
+- Add `department` to `documents` and to `users`; add `status` to `users`.
+- Extend `ensure_schema()` — the additive migration already handles new columns.
+- Enforce the department in the retrieval filter, next to the existing role check.
+- Add the department selector to the upload form, and a department badge in the document list.
+- **Tests**: a user of department A must never retrieve a chunk from department B, including after
+  a query reformulation. This is the single most important test of the whole feature.
+
+No re-indexing required: only metadata changes, embeddings are untouched.
+
+### Step 2 — registration and approval
+
+- `POST /auth/register` — creates a `pending` account, rate-limited, no information disclosure.
+- `GET /admin/registrations`, `POST /admin/registrations/{id}` — approve with role and department,
+  or refuse.
+- Login rejects any status other than `active`, with a message that distinguishes "awaiting
+  approval" from "refused" without leaking whether an account exists to an anonymous caller.
+- **Tests**: a pending account can read nothing; approval grants exactly what the administrator
+  chose, never what the applicant requested.
+
+### Step 3 — the voice
+
+- A per-department system prompt appended to the shared one. HR vocabulary is not technical
+  vocabulary, and what should be refused differs: an HR user should not receive firewall
+  configuration advice.
+- Keep the shared guardrails intact: answer only from the extracts, treat extracts as untrusted
+  data, refuse rather than invent.
+
+### Step 4 — the vocabulary
+
+- Split the glossary per department. The mechanism exists; it needs a key.
+- Mind the trap already hit: a two-letter acronym collides with an ordinary French word ("SI" versus
+  "si"), and the same acronym can mean different things in different departments — which is itself
+  an argument for separate glossaries.
+
+### Step 5 — the tools
+
+This is where departments earn their keep. "How many leave days do I have left?" belongs to the HR
+system; "what is the state of the equipment pool?" to logistics.
+
+Each tool keeps the current contract ([§18](../architecture_agent_ia_offline_ANSI.md)): a fixed
+function, no parameter taken from the question, the caller's permissions applied, every invocation
+logged, and a declared department as well as declared roles.
+
+**On LangChain**: not needed. `langchain-core` is already present as a LangGraph dependency, and the
+project calls Ollama directly in about sixty lines of `httpx`. Adding full LangChain would bring
+chains, agents and retrievers the project never uses, enlarging the dependency surface for no
+capability — a poor trade for a system that must be auditable and transferable offline.
+
+### Step 6 — the measurement
+
+- An evaluation set per department. Without it, improving technical answers can silently degrade HR
+  answers.
+- Group the existing user feedback ([§5.13](ARCHITECTURE_TECHNIQUE.md)) by department to see where
+  quality slips first.
+
+---
+
+## 7. Complementary ideas that follow from the split
+
+**A referent per document.** Who to contact when a procedure is expired or ambiguous? Combined with
+validity dates ([§5.12](ARCHITECTURE_TECHNIQUE.md)), a refusal becomes an action: "this procedure
+expired on 30/06/2026 — referent: ressources humaines".
+
+**A "who should I ask" answer.** When nothing is found inside the user's perimeter, name the
+department that probably holds the information instead of stopping at a refusal. Useful precisely
+because partitioning prevents seeing beyond one's own scope.
+
+**Bulk import.** Importing several hundred documents one at a time through the interface is not
+realistic. A folder import, with department and roles inferred from the directory tree, is needed
+before any real deployment.
+
+**Per-department statistics.** The existing tools count within the caller's perimeter; an
+administrator needs the per-department view to know which corpus is covered and which is not.
+
+**An onboarding corpus for interns.** The stated goal is helping interns. Their questions are
+predictable — how leave works, who to contact, which tools to install, what the code conventions
+are. A small, deliberately curated "accueil" corpus marked `transverse` would deliver visible value
+quickly, and makes a far better demonstration than a general document dump.
+
+---
+
+## 8. Decisions needed before writing code
+
+These belong to ANSI, not to the code:
+
+1. **Can a user belong to several departments?** The target design says one. If a director needs
+   cross-department reading, that is a second mechanism, not a wider single department.
+2. **What happens to cross-cutting documents** (règlement intérieur, charte informatique)? The
+   `transverse` department above is a proposal, not a decision.
+3. **Who approves requests?** A single central administrator is the stated design. At scale, a
+   per-department approver may be needed — which is a different permission model.
+4. **The retention policy**, still unsettled. It remains the blocker before any real data, whatever
+   the departmental split.
+
+---
+
+## 9. Suggested order of work
+
+1. Step 1 (perimeter) — largest value, no model involvement, fully testable.
+2. The **prompt-injection test suite**, still missing and still the most conspicuous gap
+   ([§6.1](ARCHITECTURE_TECHNIQUE.md)). Partitioning by department makes it more important, not
+   less: a crafted document must not be able to make the assistant reveal another department's
+   content.
+3. Step 2 (registration and approval).
+4. Steps 3 and 4 (prompt and glossary) — cheap, visible improvement.
+5. Step 5 (tools), once a real internal API is available to call.
+6. Step 6 (measurement), continuously from step 1 onward.

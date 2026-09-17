@@ -5,9 +5,10 @@ itself, its documentation in `docs/`, and everything an ANSI agent sees stay in 
 
 ## What this is
 
-An **offline** document assistant for ANSI (Agence Nationale pour la Sécurité des Systèmes
-d'Information, Niger). It answers agents' questions from imported internal documents, citing its
-sources, without any data leaving the infrastructure.
+An **offline** document assistant for ANSI — Agence Nationale pour la Société de l'Information,
+Niger. ANSI builds software and digital services for the State; it is **not** a cybersecurity
+agency. The assistant answers staff and interns' questions from imported internal documents,
+citing its sources, without any data leaving the infrastructure.
 
 Internship project, at **proof-of-concept** stage. Not a deployed product.
 
@@ -57,6 +58,8 @@ Optional PostgreSQL + pgvector: `docker start ansi-pgvector`, then set `DATABASE
 - **The `0.18` similarity threshold separates nothing.** Measured: a question with no answer scored
   0.354 while a legitimate one scored 0.344. The **system prompt** is what refuses, not the
   threshold. Do not claim otherwise in documentation.
+- **ANSI is the *Agence Nationale pour la Société de l'Information*** — it builds software and
+  digital services for the State. It is **not** a cybersecurity agency; do not describe it as one.
 - **`classification` is a label, not an enforcement.** Only `allowed_roles` restricts access. A
   document marked "confidentiel" with all roles allowed is readable by everyone.
 - **Tests share the development database.** They must assert on their own data and never assume an
