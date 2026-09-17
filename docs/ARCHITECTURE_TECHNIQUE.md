@@ -175,6 +175,39 @@ corpus déjà en place.
 
 ---
 
+## 3 ter. Demande d'accès et approbation
+
+Un agent demande un accès ; l'administrateur central accorde ou refuse.
+
+```text
+inscription ──► en attente ──► [décision de l'administrateur]
+                                 ├── rôle + service accordés ──► actif
+                                 └── refus ────────────────────► refusé
+```
+
+`POST /auth/register` est **le seul point d'écriture non authentifié de
+l'application**, ce qui impose trois règles :
+
+- **Réponse identique que l'identifiant existe ou non** — même code, même corps.
+  Sans cela, l'inscription devient un oracle d'énumération des agents de l'ANSI.
+- **Limitation par adresse source** (`REGISTRATION_RATE_LIMIT_PER_HOUR`), pour qu'on
+  ne puisse pas inonder la table.
+- **Le compte est créé sans rôle ni service** : il ne lit rien. Le service demandé
+  est conservé comme simple indication.
+
+**L'approbation attribue ce que l'administrateur choisit**, jamais ce que le
+demandeur a réclamé. Le test le vérifie explicitement : une demande pour les RH
+approuvée en logistique produit bien un compte logistique.
+
+La connexion n'accepte que `status == "active"`. Un compte en attente ou refusé
+reçoit un `403` explicite plutôt qu'un message d'identifiants invalides, parce
+qu'à ce stade l'appelant a déjà prouvé qu'il connaît le mot de passe.
+
+Couverture : `tests/registration_probe.py`, 16 contrôles, dont l'absence
+d'énumération et l'impossibilité de traiter deux fois la même demande.
+
+---
+
 ## 4. Sécurité déjà en place
 
 | Mesure | Implémentation |
@@ -715,7 +748,7 @@ C'est la lacune la plus gênante du projet, et elle concerne précisément le m�
 
 | Test demandé (§35 « Sécurité ») | État |
 |---|---|
-| **Injection de prompt** | ❌ **Jamais testé.** La défense existe (consigne système isolant données et instructions) mais aucun test ne charge un document piégé pour vérifier qu'elle tient. |
+| **Injection de prompt** | ✅ **Testé** — `tests/security_probe.py`, 17 contrôles, 17 passés (2026-09-17) |
 | Tentative d'accès à un document interdit | ✅ Couvert par `smoke_rag.py` |
 | Données sensibles dans les logs | ❌ Jamais vérifié |
 | Réseau sortant | ❌ Jamais vérifié (nécessite un déploiement) |

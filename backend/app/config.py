@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     chat_rate_limit_per_minute: int = 12
     login_rate_limit_per_minute: int = 5  # failed attempts, per account and per address
     login_rate_limit_window_seconds: int = 300
+    # Access requests tolerated per source address per hour. 0 disables registration throttling.
+    registration_rate_limit_per_hour: int = 5
 
     # Local OCR for scanned PDFs. Empty tesseract_cmd disables OCR entirely.
     tesseract_cmd: str = r"C:\Program Files\Tesseract-OCR\tesseract.exe"

@@ -204,6 +204,22 @@ class ResetPasswordRequest(BaseModel):
     password: str = Field(min_length=12, max_length=128)
 
 
+class RegistrationRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    password: str = Field(min_length=12, max_length=128)
+    requested_department: str
+    reason: str = Field(default="", max_length=500)
+
+
+class ApproveRegistrationRequest(BaseModel):
+    role: str = Field(default="user")
+    department: str
+
+
+class RefuseRegistrationRequest(BaseModel):
+    reason: str = Field(default="", max_length=500)
+
+
 class SearchRequest(BaseModel):
     query: str = Field(min_length=2, max_length=500)
     limit: int = Field(default=8, ge=1, le=25)
@@ -412,7 +428,16 @@ def login(
     client_ip = request.client.host if request.client else "unknown"
     enforce_login_rate_limit(payload.username, client_ip)
     user = db.scalar(select(User).where(User.username == payload.username))
-    if not user or not user.is_active or not verify_password(payload.password, user.password_hash):
+    if user and user.status == "pending" and verify_password(payload.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Votre demande d’accès est en attente de validation par l’administrateur.",
+        )
+    if user and user.status == "refused" and verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Votre demande d’accès a été refusée.")
+    if not user or not user.is_active or user.status != "active" or not verify_password(
+        payload.password, user.password_hash
+    ):
         record_failed_login(payload.username, client_ip)
         if user:
             db.add(AuditEvent(actor_id=user.id, document_id=None, event_type="login_failed"))
@@ -982,6 +1007,117 @@ def list_feedback(
         }
         for entry in entries
     ]
+
+
+@app.post("/auth/register", status_code=status.HTTP_202_ACCEPTED)
+def register(
+    payload: RegistrationRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    """The only unauthenticated write endpoint in the application.
+
+    Three rules follow from that:
+
+    - **Identical response whether or not the username exists.** Otherwise
+      registration becomes an oracle for enumerating who works at ANSI.
+    - **Rate limited per source address**, so it cannot be used to flood the table.
+    - **The account is created with no role and no department**, so it can read
+      nothing until an administrator decides otherwise. The requested department is
+      recorded as a hint, never applied.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    limit = get_settings().registration_rate_limit_per_hour
+    if limit > 0 and not _within_limit(f"register:ip:{client_ip}", limit, 3600):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Trop de demandes depuis cette adresse. Réessayez plus tard.",
+        )
+
+    acknowledgement = {
+        "detail": "Votre demande a été enregistrée. Un administrateur la validera avant votre premier accès."
+    }
+    if payload.requested_department not in DEPARTMENTS:
+        raise HTTPException(status_code=422, detail="Service demandé invalide")
+
+    if db.scalar(select(User).where(User.username == payload.username)):
+        # Same body, same status code: an existing username is indistinguishable.
+        logger.info("Demande d'inscription sur un identifiant existant depuis %s", client_ip)
+        return acknowledgement
+
+    db.add(User(
+        username=payload.username,
+        password_hash=password_hash.hash(payload.password),
+        role="user",
+        department=None,
+        status="pending",
+        requested_department=payload.requested_department,
+        request_reason=payload.reason.strip(),
+        is_active=True,
+    ))
+    db.commit()
+    logger.info("Nouvelle demande d'inscription depuis %s", client_ip)
+    return acknowledgement
+
+
+@app.get("/admin/registrations")
+def list_registrations(
+    _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)
+) -> list[dict[str, object]]:
+    pending = db.scalars(select(User).where(User.status == "pending").order_by(User.id)).all()
+    return [
+        {
+            "id": account.id,
+            "username": account.username,
+            "requested_department": account.requested_department,
+            "requested_department_label": department_label(account.requested_department),
+            "reason": account.request_reason,
+        }
+        for account in pending
+    ]
+
+
+@app.post("/admin/registrations/{user_id}/approve")
+def approve_registration(
+    user_id: int,
+    payload: ApproveRegistrationRequest,
+    admin: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """The administrator chooses role and department; the request is only a hint."""
+    account = db.get(User, user_id)
+    if not account or account.status != "pending":
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    if payload.role not in ROLES:
+        raise HTTPException(status_code=422, detail="Rôle invalide")
+    if payload.department not in DEPARTMENTS:
+        raise HTTPException(status_code=422, detail="Service invalide")
+
+    account.role = payload.role
+    account.department = payload.department
+    account.status = "active"
+    account.is_active = True
+    db.add(AuditEvent(actor_id=admin.id, document_id=None, event_type="registration_approved"))
+    db.commit()
+    db.refresh(account)
+    return account_summary(account)
+
+
+@app.post("/admin/registrations/{user_id}/refuse", status_code=status.HTTP_204_NO_CONTENT)
+def refuse_registration(
+    user_id: int,
+    payload: RefuseRegistrationRequest,
+    admin: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> None:
+    account = db.get(User, user_id)
+    if not account or account.status != "pending":
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    account.status = "refused"
+    account.is_active = False
+    account.request_reason = payload.reason.strip() or account.request_reason
+    db.add(AuditEvent(actor_id=admin.id, document_id=None, event_type="registration_refused"))
+    db.commit()
 
 
 @app.get("/admin/users")

@@ -278,13 +278,35 @@ function Login({ onLogin, theme, onToggleTheme }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [mode, setMode] = useState('login')
+  const [requestedDepartment, setRequestedDepartment] = useState('technique')
+  const [reason, setReason] = useState('')
 
   async function submit(event) {
     event.preventDefault()
     setBusy(true)
     setError('')
+    setNotice('')
     try {
+      if (mode === 'register') {
+        const response = await request('/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username,
+            password,
+            requested_department: requestedDepartment,
+            reason,
+          }),
+        })
+        setNotice(response.detail)
+        setMode('login')
+        setPassword('')
+        setReason('')
+        return
+      }
       await request('/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -318,9 +340,14 @@ function Login({ onLogin, theme, onToggleTheme }) {
       </section>
       <section className="login-panel">
         <form className="login-card" onSubmit={submit}>
-          <p className="overline">ACCÈS SÉCURISÉ</p>
-          <h2>Bienvenue</h2>
-          <p className="subtle">Connectez-vous pour accéder à votre espace documentaire.</p>
+          <p className="overline">{mode === 'register' ? "DEMANDE D'ACCÈS" : 'ACCÈS SÉCURISÉ'}</p>
+          <h2>{mode === 'register' ? 'Demander un accès' : 'Bienvenue'}</h2>
+          <p className="subtle">
+            {mode === 'register'
+              ? "Votre demande sera transmise à l'administrateur, qui définira votre rôle et votre service."
+              : 'Connectez-vous pour accéder à votre espace documentaire.'}
+          </p>
+          {notice && <p className="form-notice">{notice}</p>}
           <label>
             Identifiant
             <input
@@ -342,9 +369,48 @@ function Login({ onLogin, theme, onToggleTheme }) {
               required
             />
           </label>
+          {mode === 'register' && (
+            <>
+              <label>
+                Service souhaité
+                <select
+                  value={requestedDepartment}
+                  onChange={(event) => setRequestedDepartment(event.target.value)}
+                >
+                  {DEPARTMENTS.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Motif <span className="field-hint">(facultatif)</span>
+                <input
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                  maxLength={500}
+                  placeholder="Ex. stagiaire au service RH"
+                />
+              </label>
+            </>
+          )}
           {error && <p className="error">{error}</p>}
           <button className="primary full" disabled={busy}>
-            {busy ? 'Connexion…' : "Accéder à l'assistant →"}
+            {busy
+              ? mode === 'register' ? 'Envoi…' : 'Connexion…'
+              : mode === 'register' ? 'Envoyer la demande →' : "Accéder à l'assistant →"}
+          </button>
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => {
+              setMode(mode === 'register' ? 'login' : 'register')
+              setError('')
+              setNotice('')
+            }}
+          >
+            {mode === 'register' ? "J'ai déjà un compte — me connecter" : "Pas encore de compte ? Demander un accès"}
           </button>
           <p className="form-note">Ce POC ne transmet ni vos questions ni vos documents vers une API IA externe.</p>
         </form>
@@ -1053,8 +1119,37 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
   )
 }
 
+function RegistrationRow({ entry, onDecide }) {
+  const [department, setDepartment] = useState(entry.requested_department ?? 'technique')
+  return (
+    <article className="registration-row">
+      <div className="registration-meta">
+        <strong>{entry.username}</strong>
+        <span>
+          demande : {entry.requested_department_label}
+          {entry.reason ? ` — « ${entry.reason} »` : ''}
+        </span>
+      </div>
+      <select value={department} onChange={(event) => setDepartment(event.target.value)}>
+        {DEPARTMENTS.map((item) => (
+          <option key={item.value} value={item.value}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+      <button className="text-button" onClick={() => onDecide(entry, 'approve', department)}>
+        <Icon name="check" /> Accorder
+      </button>
+      <button className="icon-button" title="Refuser" onClick={() => onDecide(entry, 'refuse')}>
+        <Icon name="close" />
+      </button>
+    </article>
+  )
+}
+
 function UsersView({ user, onToast }) {
   const [users, setUsers] = useState([])
+  const [registrations, setRegistrations] = useState([])
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState('user')
@@ -1064,9 +1159,38 @@ function UsersView({ user, onToast }) {
     setUsers(await request('/admin/users'))
   }
 
+  async function loadRegistrations() {
+    setRegistrations(await request('/admin/registrations'))
+  }
+
   useEffect(() => {
-    if (user.role === 'admin') loadUsers().catch((requestError) => setError(requestError.message))
+    if (user.role !== 'admin') return
+    loadUsers().catch((requestError) => setError(requestError.message))
+    loadRegistrations().catch((requestError) => setError(requestError.message))
   }, [user.role])
+
+  async function decide(entry, action, department) {
+    try {
+      if (action === 'approve') {
+        await request(`/admin/registrations/${entry.id}/approve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: 'user', department }),
+        })
+        onToast(`Accès accordé à « ${entry.username} ».`, 'success')
+      } else {
+        await request(`/admin/registrations/${entry.id}/refuse`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: '' }),
+        })
+        onToast(`Demande de « ${entry.username} » refusée.`, 'success')
+      }
+      await Promise.all([loadRegistrations(), loadUsers()])
+    } catch (requestError) {
+      onToast(requestError.message, 'error')
+    }
+  }
 
   if (user.role !== 'admin') {
     return (
@@ -1140,6 +1264,17 @@ function UsersView({ user, onToast }) {
           <p>Les rôles gouvernent l'accès aux documents et aux fonctions d'administration.</p>
         </div>
       </div>
+      {registrations.length > 0 && (
+        <div className="registration-queue">
+          <p className="overline">DEMANDES D'ACCÈS EN ATTENTE ({registrations.length})</p>
+          <p className="queue-hint">
+            Le service demandé n'est qu'une indication : vous choisissez celui qui est réellement accordé.
+          </p>
+          {registrations.map((entry) => (
+            <RegistrationRow key={entry.id} entry={entry} onDecide={decide} />
+          ))}
+        </div>
+      )}
       <div className="admin-grid">
         <form className="upload-card" onSubmit={submit}>
           <h3>Créer un compte</h3>

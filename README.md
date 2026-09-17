@@ -23,9 +23,12 @@ et des tests de sécurité.
 | Authentification, rôles, cloisonnement par rôle | ✅ Fonctionne, testé |
 | Conteneurisation, reverse proxy, supervision, sauvegardes | ❌ Rien |
 | Politique de rétention et de journalisation | ❌ À arbitrer — **bloquant** |
-| Tests d'injection de prompt et de fuite par les logs | ❌ Jamais exécutés |
+| Tests d'injection de prompt et de cloisonnement | ✅ 17 contrôles passés |
+| Tests de fuite par les logs et de réseau sortant | ❌ Jamais exécutés |
 | Outils métier (répondre depuis la base, pas les documents) | ✅ Quatre outils, droits appliqués |
-| Agents spécialisés par département | ❌ À concevoir — voir [docs/FUTURE_IDEAS.md](docs/FUTURE_IDEAS.md) |
+| Cloisonnement par service (4 services + transverse) | ✅ Appliqué avant la recherche, 40 tests |
+| Demande d'accès validée par l'administrateur | ✅ 16 contrôles |
+| Agents spécialisés : consignes et glossaires par service | ❌ Phases C et D — voir [docs/FUTURE_IDEAS.md](docs/FUTURE_IDEAS.md) |
 
 Les points non traités sont détaillés dans
 [docs/ARCHITECTURE_TECHNIQUE.md](docs/ARCHITECTURE_TECHNIQUE.md) §8. Tant qu'ils ne sont pas traités,
@@ -130,6 +133,8 @@ Puis, depuis `backend`, avec Ollama démarré :
 .\.venv\Scripts\python.exe -m tests.evaluate                  # qualité des réponses (exactitude, sources, refus, latence)
 .\.venv\Scripts\python.exe -m tests.evaluate --model qwen3:0.6b   # comparer un autre modèle
 .\.venv\Scripts\python.exe -m tests.evaluate --attempts 1         # mesurer l'apport de la reformulation
+.\.venv\Scripts\python.exe -m tests.security_probe              # injection de prompt et cloisonnement (nécessite Ollama)
+.\.venv\Scripts\python.exe -m tests.registration_probe          # demande d'accès et approbation (sans Ollama)
 ```
 
 Le jeu d'évaluation distingue les questions **à formulation directe** (le vocabulaire de la question

@@ -1786,6 +1786,76 @@ nav button.active .nav-key,
 /* Users                                                               */
 /* ------------------------------------------------------------------ */
 
+/* Pending access requests, above the account list. */
+.registration-queue {
+  padding: 20px 22px;
+  margin-bottom: 22px;
+  border: 1px solid color-mix(in srgb, var(--gold) 45%, var(--line));
+  border-radius: 13px;
+  background: var(--warning-soft);
+}
+
+.queue-hint {
+  margin: 8px 0 16px;
+  color: var(--warning);
+  font-size: 0.82rem;
+}
+
+.registration-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.registration-meta {
+  flex: 1;
+  min-width: 190px;
+}
+
+.registration-meta strong {
+  display: block;
+}
+
+.registration-meta span {
+  color: var(--muted);
+  font-size: 0.79rem;
+}
+
+.registration-row select {
+  width: auto;
+  min-width: 180px;
+  padding: 7px 9px;
+  font-size: 0.8rem;
+}
+
+.form-notice {
+  padding: 11px 13px;
+  margin: 16px 0 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 9px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.link-button {
+  width: 100%;
+  padding: 10px 0 0;
+  border: 0;
+  color: var(--accent-text);
+  background: none;
+  font-size: 0.82rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .admin-grid {
   display: grid;
   grid-template-columns: minmax(280px, 0.8fr) minmax(300px, 1.2fr);
