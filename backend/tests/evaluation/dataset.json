@@ -6,129 +6,201 @@
       "title": "Note de cadrage - projet pilote",
       "classification": "interne",
       "allowed_roles": "admin,document_manager,user",
-      "content": "Note de cadrage du projet pilote d'assistant documentaire.\nLe projet demarre le 15 octobre 2026 et se termine le 31 mars 2027.\nLa responsable du projet est Amina Souley, direction des systemes d'information.\nLe budget materiel approuve est de 12 millions FCFA.\nUne evaluation intermediaire est prevue le 30 novembre 2026.\nL'objectif est d'indexer 50 documents internes non sensibles et de mesurer la qualite des reponses."
+      "content": "Note de cadrage du projet pilote d'assistant documentaire.\nLe projet demarre le 15 octobre 2026 et se termine le 31 mars 2027.\nLa responsable du projet est Amina Souley, direction des systemes d'information.\nLe budget materiel approuve est de 12 millions FCFA.\nUne evaluation intermediaire est prevue le 30 novembre 2026.\nL'objectif est d'indexer 50 documents internes non sensibles et de mesurer la qualite des reponses.",
+      "department": "transverse"
     },
     {
       "filename": "procedure_acces.txt",
       "title": "Procedure - gestion des acces",
       "classification": "direction",
       "allowed_roles": "admin,document_manager",
-      "content": "Procedure de gestion des acces aux documents classifies.\nToute demande d'acces doit etre validee par le responsable hierarchique du demandeur.\nLe principe du droit d'en connaitre s'applique a toutes les demandes.\nLes acces sont revus chaque trimestre par la direction.\nLa revocation d'un compte doit intervenir dans les 24 heures suivant le depart d'un agent.\nToute exception doit etre documentee et approuvee par le directeur."
+      "content": "Procedure de gestion des acces aux documents classifies.\nToute demande d'acces doit etre validee par le responsable hierarchique du demandeur.\nLe principe du droit d'en connaitre s'applique a toutes les demandes.\nLes acces sont revus chaque trimestre par la direction.\nLa revocation d'un compte doit intervenir dans les 24 heures suivant le depart d'un agent.\nToute exception doit etre documentee et approuvee par le directeur.",
+      "department": "transverse"
     },
     {
       "filename": "politique_mots_de_passe.txt",
       "title": "Politique de mots de passe",
       "classification": "interne",
       "allowed_roles": "admin,document_manager,user",
-      "content": "Politique de mots de passe des agents.\nLa longueur minimale exigee est de 12 caracteres.\nLe renouvellement est obligatoire tous les 90 jours.\nLes six derniers mots de passe ne peuvent pas etre reutilises.\nApres 5 tentatives echouees, le compte est verrouille pendant 30 minutes.\nL'authentification a double facteur est obligatoire pour les comptes administrateurs."
+      "content": "Politique de mots de passe des agents.\nLa longueur minimale exigee est de 12 caracteres.\nLe renouvellement est obligatoire tous les 90 jours.\nLes six derniers mots de passe ne peuvent pas etre reutilises.\nApres 5 tentatives echouees, le compte est verrouille pendant 30 minutes.\nL'authentification a double facteur est obligatoire pour les comptes administrateurs.",
+      "department": "transverse"
     },
     {
       "filename": "plan_sauvegarde.txt",
       "title": "Plan de sauvegarde",
       "classification": "interne",
       "allowed_roles": "admin,document_manager,user",
-      "content": "Plan de sauvegarde des systemes.\nUne sauvegarde complete est realisee chaque dimanche a 2 heures du matin.\nDes sauvegardes incrementales sont realisees chaque nuit en semaine.\nLa duree de retention des sauvegardes est de 90 jours.\nUn test de restauration est realise chaque trimestre.\nLes sauvegardes sont conservees sur deux sites distincts."
+      "content": "Plan de sauvegarde des systemes.\nUne sauvegarde complete est realisee chaque dimanche a 2 heures du matin.\nDes sauvegardes incrementales sont realisees chaque nuit en semaine.\nLa duree de retention des sauvegardes est de 90 jours.\nUn test de restauration est realise chaque trimestre.\nLes sauvegardes sont conservees sur deux sites distincts.",
+      "department": "transverse"
     },
     {
       "filename": "procedure_incident.txt",
       "title": "Procedure de reponse aux incidents",
       "classification": "interne",
       "allowed_roles": "admin,document_manager,user",
-      "content": "Procedure de reponse aux incidents de securite.\nTout incident doit etre signale au CERT dans un delai maximal de 2 heures.\nLe niveau de gravite est classe de 1 (critique) a 4 (mineur).\nUn incident de niveau 1 declenche la cellule de crise immediatement.\nLe rapport post-incident est attendu sous 5 jours ouvrables.\nLe registre des incidents est conserve pendant 3 ans."
+      "content": "Procedure de reponse aux incidents de securite.\nTout incident doit etre signale au CERT dans un delai maximal de 2 heures.\nLe niveau de gravite est classe de 1 (critique) a 4 (mineur).\nUn incident de niveau 1 declenche la cellule de crise immediatement.\nLe rapport post-incident est attendu sous 5 jours ouvrables.\nLe registre des incidents est conserve pendant 3 ans.",
+      "department": "transverse"
     },
     {
       "filename": "charte_teletravail.txt",
       "title": "Charte du teletravail",
       "classification": "interne",
       "allowed_roles": "admin,document_manager,user",
-      "content": "Charte du teletravail des agents.\nLe teletravail est limite a 2 jours par semaine.\nUne demande doit etre deposee au moins 15 jours a l'avance.\nL'utilisation du VPN de l'agence est obligatoire pour tout acces distant.\nL'usage d'un equipement personnel pour traiter des donnees internes est interdit.\nLe responsable hierarchique valide chaque demande."
+      "content": "Charte du teletravail des agents.\nLe teletravail est limite a 2 jours par semaine.\nUne demande doit etre deposee au moins 15 jours a l'avance.\nL'utilisation du VPN de l'agence est obligatoire pour tout acces distant.\nL'usage d'un equipement personnel pour traiter des donnees internes est interdit.\nLe responsable hierarchique valide chaque demande.",
+      "department": "transverse"
+    },
+    {
+      "title": "Procedure de mise en production",
+      "filename": "procedure_mise_en_production.txt",
+      "classification": "interne",
+      "allowed_roles": "admin,document_manager,user",
+      "department": "technique",
+      "content": "Procedure de mise en production des applications internes.\nToute mise en production a lieu pendant la fenetre de maintenance, le mardi entre 20h et 23h.\nUne mise en production exceptionnelle exige la validation du chef de projet et du responsable de la DSI.\nLe gel des modifications commence 48 heures avant une mise en production.\nUn retour arriere doit rester possible pendant 7 jours apres la mise en production.\nLe MCO des serveurs applicatifs est assure du lundi au vendredi, de 8h a 18h.\n"
+    },
+    {
+      "title": "Regles d engagement des depenses",
+      "filename": "regles_engagement_depenses.txt",
+      "classification": "interne",
+      "allowed_roles": "admin,document_manager,user",
+      "department": "finance",
+      "content": "Regles d engagement des depenses, exercice 2026.\nLe plafond de depense sans validation prealable est de 250000 FCFA par engagement.\nAu-dela de ce plafond, la validation de la direction administrative et financiere est requise.\nUne autorisation d engagement non couverte par un credit de paiement ne donne lieu a aucun decaissement avant l exercice suivant.\nLes CP ouverts au titre de l exercice 2026 couvrent en priorite les engagements anterieurs.\nLe delai de paiement d une facture conforme est de 30 jours a compter de sa reception.\n"
+    },
+    {
+      "title": "Procedure de commande de materiel",
+      "filename": "procedure_commande_materiel.txt",
+      "classification": "interne",
+      "allowed_roles": "admin,document_manager,user",
+      "department": "logistique",
+      "content": "Procedure de commande de materiel.\nToute commande fait l objet d un bon de commande signe par le responsable de la logistique.\nA partir de 500000 FCFA, trois devis sont obligatoires avant tout engagement.\nLe delai de livraison contractuel est de 10 jours ouvrables apres reception du bon de commande.\nLa reception du materiel donne lieu a un proces-verbal signe contradictoirement.\nLe stock de consommables est inventorie chaque trimestre.\n"
+    },
+    {
+      "title": "Procedure de conges",
+      "filename": "procedure_conges.txt",
+      "classification": "interne",
+      "allowed_roles": "admin,document_manager,user",
+      "department": "rh",
+      "content": "Procedure de conges du service des ressources humaines.\nLes conges annuels sont de 30 jours ouvrables par annee de service.\nLa demande de conges se depose 15 jours a l avance aupres du responsable hierarchique.\nLe report d un reliquat de CP sur l annee suivante est limite a 10 jours ouvrables.\nLe preavis de demission est de 3 mois pour un agent titulaire.\nLe conge de maternite est de 14 semaines.\n"
     }
   ],
   "questions": [
     {
       "question": "Quand demarre le projet pilote ?",
-      "expected": ["15 octobre 2026"],
+      "expected": [
+        "15 octobre 2026"
+      ],
       "source": "note_cadrage_pilote.txt"
     },
     {
       "question": "Qui est la responsable du projet pilote ?",
-      "expected": ["Amina", "Souley"],
+      "expected": [
+        "Amina",
+        "Souley"
+      ],
       "source": "note_cadrage_pilote.txt"
     },
     {
       "question": "Quel est le budget materiel approuve pour le projet pilote ?",
-      "expected": ["12", "FCFA"],
+      "expected": [
+        "12",
+        "FCFA"
+      ],
       "source": "note_cadrage_pilote.txt"
     },
     {
       "question": "Quelle est la longueur minimale exigee pour un mot de passe ?",
-      "expected": ["12"],
+      "expected": [
+        "12"
+      ],
       "source": "politique_mots_de_passe.txt"
     },
     {
       "question": "Tous les combien de jours faut-il renouveler son mot de passe ?",
-      "expected": ["90"],
+      "expected": [
+        "90"
+      ],
       "source": "politique_mots_de_passe.txt"
     },
     {
       "question": "Que se passe-t-il apres 5 tentatives de connexion echouees ?",
-      "expected": ["30"],
+      "expected": [
+        "30"
+      ],
       "source": "politique_mots_de_passe.txt"
     },
     {
       "question": "A quelle frequence la sauvegarde complete est-elle realisee ?",
-      "expected": ["dimanche"],
+      "expected": [
+        "dimanche"
+      ],
       "source": "plan_sauvegarde.txt"
     },
     {
       "question": "Combien de temps les sauvegardes sont-elles conservees ?",
-      "expected": ["90"],
+      "expected": [
+        "90"
+      ],
       "source": "plan_sauvegarde.txt"
     },
     {
       "question": "Dans quel delai un incident de securite doit-il etre signale au CERT ?",
-      "expected": ["2"],
+      "expected": [
+        "2"
+      ],
       "source": "procedure_incident.txt"
     },
     {
       "question": "Combien de temps le registre des incidents est-il conserve ?",
-      "expected": ["3"],
+      "expected": [
+        "3"
+      ],
       "source": "procedure_incident.txt"
     },
     {
       "question": "Combien de jours de teletravail par semaine sont autorises ?",
-      "expected": ["2"],
+      "expected": [
+        "2"
+      ],
       "source": "charte_teletravail.txt"
     },
     {
       "question": "Le VPN est-il obligatoire en teletravail ?",
-      "expected": ["obligatoire"],
+      "expected": [
+        "obligatoire"
+      ],
       "source": "charte_teletravail.txt"
     },
     {
       "question": "Combien de temps puis-je travailler depuis chez moi chaque semaine ?",
-      "expected": ["2"],
+      "expected": [
+        "2"
+      ],
       "source": "charte_teletravail.txt",
       "hard": true,
       "_why": "dit 'depuis chez moi' la ou le document dit 'teletravail'"
     },
     {
       "question": "Que se passe-t-il quand un agent quitte l'agence ?",
-      "expected": ["24"],
+      "expected": [
+        "24"
+      ],
       "source": "procedure_acces.txt",
       "hard": true,
       "_why": "dit 'quitte l'agence' la ou le document dit 'depart d'un agent' et 'revocation'"
     },
     {
       "question": "Si je me trompe plusieurs fois en tapant mon code d'acces, que risque-t-il ?",
-      "expected": ["30"],
+      "expected": [
+        "30"
+      ],
       "source": "politique_mots_de_passe.txt",
       "hard": true,
       "_why": "dit 'code d'acces' la ou le document dit 'mot de passe'"
     },
     {
       "question": "A quel rythme faut-il changer son code secret ?",
-      "expected": ["90"],
+      "expected": [
+        "90"
+      ],
       "source": "politique_mots_de_passe.txt",
       "hard": true,
       "_why": "dit 'code secret' et 'rythme' la ou le document dit 'mot de passe' et 'renouvellement'"
@@ -142,6 +214,136 @@
       "question": "Quelle est la date de la prochaine reunion du conseil d'administration ?",
       "expected": [],
       "refusal": true
+    },
+    {
+      "question": "Quand a lieu la fenetre de maintenance ?",
+      "asked_by": "technique",
+      "expected": [
+        "mardi"
+      ],
+      "source": "procedure_mise_en_production.txt"
+    },
+    {
+      "question": "Combien de temps le retour arriere reste-t-il possible apres une mise en production ?",
+      "asked_by": "technique",
+      "expected": [
+        "7"
+      ],
+      "source": "procedure_mise_en_production.txt"
+    },
+    {
+      "question": "Quel est le plafond de depense sans validation prealable ?",
+      "asked_by": "finance",
+      "expected": [
+        "250"
+      ],
+      "source": "regles_engagement_depenses.txt"
+    },
+    {
+      "question": "Quel est le delai de paiement d une facture conforme ?",
+      "asked_by": "finance",
+      "expected": [
+        "30"
+      ],
+      "source": "regles_engagement_depenses.txt"
+    },
+    {
+      "question": "A partir de quel montant trois devis sont-ils obligatoires ?",
+      "asked_by": "logistique",
+      "expected": [
+        "500"
+      ],
+      "source": "procedure_commande_materiel.txt"
+    },
+    {
+      "question": "Quel est le delai de livraison contractuel apres reception du bon de commande ?",
+      "asked_by": "logistique",
+      "expected": [
+        "10"
+      ],
+      "source": "procedure_commande_materiel.txt"
+    },
+    {
+      "question": "Quelle est la duree des conges annuels ?",
+      "asked_by": "rh",
+      "expected": [
+        "30"
+      ],
+      "source": "procedure_conges.txt"
+    },
+    {
+      "question": "Quel est le preavis de demission d un agent titulaire ?",
+      "asked_by": "rh",
+      "expected": [
+        "3 mois"
+      ],
+      "source": "procedure_conges.txt"
+    },
+    {
+      "question": "Combien de jours de CP peut-on reporter sur l annee suivante ?",
+      "asked_by": "rh",
+      "expected": [
+        "10"
+      ],
+      "source": "procedure_conges.txt",
+      "hard": true,
+      "_why": "CP = conges payes pour les RH ; la reponse est dans leur document"
+    },
+    {
+      "question": "Que couvrent en priorite les CP ouverts au titre de l exercice 2026 ?",
+      "asked_by": "finance",
+      "expected": [
+        "engagements anterieurs"
+      ],
+      "source": "regles_engagement_depenses.txt",
+      "hard": true,
+      "_why": "meme sigle, autre sens : CP = credits de paiement aux finances"
+    },
+    {
+      "question": "Quel est le plafond de depense sans validation prealable ?",
+      "asked_by": "rh",
+      "refusal": true,
+      "out_of_perimeter": true,
+      "_why": "document du service finances : un agent RH ne doit pas obtenir la reponse"
+    },
+    {
+      "question": "Quelle est la duree des conges annuels ?",
+      "asked_by": "finance",
+      "refusal": true,
+      "out_of_perimeter": true,
+      "_why": "document du service RH"
+    },
+    {
+      "question": "Quel est le preavis de demission d un agent titulaire ?",
+      "asked_by": "logistique",
+      "refusal": true,
+      "out_of_perimeter": true,
+      "_why": "document du service RH"
+    },
+    {
+      "question": "A partir de quel montant trois devis sont-ils obligatoires ?",
+      "asked_by": "technique",
+      "refusal": true,
+      "out_of_perimeter": true,
+      "_why": "document du service logistique"
+    },
+    {
+      "question": "Quelle est la longueur minimale exigee pour un mot de passe ?",
+      "asked_by": "rh",
+      "expected": [
+        "12"
+      ],
+      "source": "politique_mots_de_passe.txt",
+      "_why": "controle de sur-blocage : un document transverse reste lisible par tous"
+    },
+    {
+      "question": "Combien de jours de teletravail par semaine sont autorises ?",
+      "asked_by": "logistique",
+      "expected": [
+        "2"
+      ],
+      "source": "charte_teletravail.txt",
+      "_why": "controle de sur-blocage"
     }
   ]
 }

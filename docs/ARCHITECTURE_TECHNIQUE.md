@@ -160,7 +160,7 @@ et rien sur les documents lisibles : l'accès est décidé dans `access.py`, à 
 Le choix du bloc est une lecture de dictionnaire sur le service stocké en base. Le modèle ne
 choisit pas ses propres consignes (§18 et §20 du document de conception).
 
-`tests/test_prompts.py` (32 contrôles sur la composition des consignes) et `tests/test_glossary.py` (24 contrôles sur les glossaires par service).
+`tests/test_prompts.py` (32 contrôles) tient cette séparation : les deux invariants survivent à
 la composition pour chaque service, un service ne reçoit que son propre bloc, aucun bloc ne
 contient de formulation d'octroi, et la règle « données non fiables » reste dans l'invariant —
 la déplacer dans un bloc de service la rendrait supprimable un service à la fois.
@@ -712,27 +712,75 @@ Aucune étape de l'installation ne doit exiger un accès réseau sortant : c'est
 distingue un système réellement hors ligne d'un système qui « marche sans Internet, sauf au
 démarrage ».
 
-### 5.8 Évaluation de la qualité et choix du modèle
+### 5.8 Évaluation de la qualité, service par service
 
-**État : le harnais existe, le benchmark comparatif reste à faire.**
+**État : le harnais existe et mesure par service ; le benchmark comparatif de modèles reste à faire.**
 
-`tests/evaluate.py` indexe le corpus de `tests/evaluation/dataset.json` (6 documents fictifs,
-14 questions dont 2 sans réponse dans le corpus) puis mesure :
+`tests/evaluate.py` indexe le corpus de `tests/evaluation/dataset.json` — **10 documents fictifs,
+34 questions** — puis mesure :
 
 - **exactitude** — la réponse contient les éléments attendus ;
 - **sources correctes** — le document attendu figure parmi les sources citées ;
 - **refus corrects** — sur une question sans réponse, l'assistant refuse au lieu d'inventer ;
+- **refus hors périmètre** — un agent pose une question légitime dont la réponse appartient à un
+  autre service. Ce n'est pas le cas malveillant (voir §6.1 et `security_probe.py`), c'est le cas
+  ordinaire, et ce qui se mesure est la tenue du refus ;
 - **latence** médiane et maximale.
 
 ```powershell
 .\.venv\Scripts\python.exe -m tests.evaluate
 .\.venv\Scripts\python.exe -m tests.evaluate --model qwen3:0.6b
+.\.venv\Scripts\python.exe -m tests.evaluate --department rh    # un seul service, mesure ciblée
 ```
 
-Le jeu est volontairement petit et factuel (dates, montants, durées) : il détecte les régressions,
-il ne mesure pas la qualité rédactionnelle. À étoffer avec de vrais documents ANSI anonymisés.
+#### Pourquoi un jeu par service
 
-#### Relevé de référence (2026-09-14)
+Améliorer les réponses techniques peut dégrader les réponses RH sans que rien ne le signale : une
+moyenne globale compense un service par un autre, et c'est exactement ce genre de régression
+qu'elle masque. Le relevé affiche donc **une ligne par périmètre**.
+
+Chaque question porte le service qui la pose. En son absence, elle est posée par le compte
+administrateur, qui lit tous les périmètres — c'est le comportement historique du harnais, et les
+18 questions d'origine restent inchangées.
+
+`tests/test_dataset.py` (31 contrôles statiques, instantanés) tient les propriétés dont dépend le
+relevé : une question attendue **répondue** est posée par un compte qui peut réellement lire sa
+source, et une question attendue **refusée pour raison de périmètre** est réellement hors du
+périmètre de celui qui la pose. Sans ces contrôles, changer le service d'un document transforme en
+silence un test de cloisonnement en test de document manquant, et la prochaine exécution de vingt
+minutes signale ce qui ressemble à une régression du modèle.
+
+#### Relevé de référence par service (2026-09-20, `qwen3:4b`)
+
+| Périmètre | Exactitude | Sources | Refus | Latence médiane |
+|---|---|---|---|---|
+| Administrateur (tous services) | 16/16 | 16/16 | 2/2 | 29,3 s |
+| Finance / comptabilité | 3/3 | 3/3 | 1/1 | 37,9 s |
+| Logistique | 3/3 | 3/3 | 1/1 | 43,2 s |
+| Ressources humaines | 4/4 | 4/4 | 1/1 | 34,3 s |
+| Technique / informatique | 2/2 | 2/2 | 1/1 | 47,1 s |
+| **Ensemble** | **28/28** | **28/28** | **6/6** | **34,3 s** |
+
+Dont formulation éloignée : 6/6. Refus hors périmètre : **4/4** — aucun agent n'a obtenu la réponse
+d'un autre service, et le refus est resté celui, lisible, qui énumère les documents effectivement
+interrogeables.
+
+#### Ce que ce relevé ne dit pas
+
+**34/34 signifie surtout que le jeu ne discrimine plus.** Un jeu que rien ne fait échouer n'a plus
+de marge pour détecter une régression : il établit une référence, il ne mesure plus une difficulté.
+Le prochain travail utile sur ce jeu n'est pas de l'agrandir mais de le **durcir** — questions
+ambiguës, documents longs, documents contradictoires (§6.1), formulations vraiment éloignées.
+
+**La latence ne se compare pas d'une exécution à l'autre sur cette machine.** La médiane passe de
+21,0 s (relevé du 14/09, 12 questions) à 34,3 s, mais deux exécutions du *même* sous-ensemble
+technique, à code et corpus identiques, ont donné 37,3 s puis 47,1 s de médiane — 26 % d'écart sans
+qu'aucune variable n'ait changé. La charge de la machine domine donc la mesure, et aucun des
+changements récents (corpus passé de 6 à 10 documents, bloc de service ajouté à la consigne) ne
+peut lui être imputé sans exécution contrôlée. Rappel du §1 : les chiffres de cette machine ne
+décrivent pas la cible de déploiement.
+
+#### Relevé comparatif de modèles (2026-09-14, ancien jeu de 12 questions)
 
 | Mesure | `qwen3:4b` | `qwen3:0.6b` |
 |---|---|---|
@@ -742,12 +790,12 @@ il ne mesure pas la qualité rédactionnelle. À étoffer avec de vrais document
 | Latence médiane | 21,0 s | **0,8 s** |
 | Latence maximale | 120,3 s | **1,1 s** |
 
-Trois enseignements :
+Trois enseignements, toujours valables :
 
 **1. La recherche documentaire n'est pas le facteur limitant.** Les deux modèles obtiennent
 **12/12 sur les sources** : le bon document est retrouvé et cité dans tous les cas. Ce qui les sépare
-est uniquement la capacité à *extraire* la réponse du contexte fourni. Optimiser le RAG n'améliorerait
-donc pas la qualité aujourd'hui — c'est le modèle de génération qui décide.
+est uniquement la capacité à *extraire* la réponse du contexte fourni. Optimiser le RAG
+n'améliorerait donc pas la qualité aujourd'hui — c'est le modèle de génération qui décide.
 
 **2. Un petit modèle ne suffit pas, mais il échoue proprement.** `qwen3:0.6b` est 25 fois plus
 rapide et pratiquement inutilisable : il répond « l'information n'est pas présente » alors que les
@@ -760,10 +808,11 @@ pendant le streaming dépasse **1 800 caractères** de raisonnement généré pu
 
 Piste à tester : un modèle de taille intermédiaire (3B–8B) **sans phase de raisonnement**, qui
 devrait conserver la capacité d'extraction de `qwen3:4b` sans en payer le coût. C'est le prochain
-essai à mener, avec un relevé RAM/VRAM en parallèle.
+essai à mener, avec un relevé RAM/VRAM en parallèle, et désormais service par service.
 
-Attention à la variance : à `temperature 0.15` et sur 12 questions, un écart d'un ou deux points
-entre deux exécutions est du bruit, pas une régression.
+Attention à la variance : à `temperature 0.15`, un écart d'un ou deux points entre deux exécutions
+est du bruit, pas une régression.
+
 
 ### 5.9 Protection de l'authentification
 
@@ -849,6 +898,7 @@ Correspondance avec les phases du document d'architecture (§34).
 |---|---|---|
 | 1 — Faisabilité | Ollama + modèles locaux, inférence hors ligne | ✅ Fait |
 | 1 | Harnais d'évaluation reproductible | ✅ Fait (§5.8) |
+| 1 | Jeu d'évaluation **par service**, avec questions hors périmètre | ✅ Fait (§5.8) |
 | 1 | Benchmark comparatif de modèles, mesures RAM/VRAM | ❌ À faire |
 | 2 — RAG | Extraction, découpage, embeddings locaux | ✅ Fait |
 | 2 | Index vectoriel | ✅ pgvector + HNSW, SQLite en repli (§5.2) |
@@ -880,10 +930,11 @@ Correspondance avec les phases du document d'architecture (§34).
 | 5 | Procédure de mise à jour hors ligne | ❌ À faire |
 | 5 | Tests de charge et de sécurité | ❌ À faire |
 
-Couverture de tests, hors ligne : **177 contrôles** — `tests/test_units.py` (logique pure),
+Couverture de tests, hors ligne : **208 contrôles** — `tests/test_units.py` (logique pure),
 `tests/test_access.py` (40 contrôles de périmètre, toutes les paires de services dans les deux sens),
-`tests/test_prompts.py` (32 contrôles sur la composition des consignes) et `tests/test_glossary.py`
-(24 contrôles sur les glossaires par service).
+`tests/test_prompts.py` (32 contrôles sur la composition des consignes), `tests/test_glossary.py`
+(24 contrôles sur les glossaires par service) et `tests/test_dataset.py` (31 contrôles
+d’intégrité du jeu d’évaluation).
 
 Sondes nécessitant Ollama : `tests/smoke_rag.py` (bout en bout), `tests/security_probe.py`
 (injection de prompt et fuite entre services), `tests/prompt_probe.py` (effet réel des consignes

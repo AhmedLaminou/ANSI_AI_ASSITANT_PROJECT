@@ -151,20 +151,29 @@ Puis, depuis `backend`, avec Ollama démarré :
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_units.py -q   # logique pure, rapide, sans Ollama
-.\.venv\Scripts\python.exe -m pytest tests/ -q                   # toute la suite hors ligne : 177 contrôles
+.\.venv\Scripts\python.exe -m pytest tests/ -q                   # toute la suite hors ligne : 208 contrôles
 .\.venv\Scripts\python.exe -m tests.smoke_rag                 # bout en bout, crée et supprime ses données
-.\.venv\Scripts\python.exe -m tests.evaluate                  # qualité des réponses (exactitude, sources, refus, latence)
+.\.venv\Scripts\python.exe -m tests.evaluate                  # qualité par service (exactitude, sources, refus, latence)
 .\.venv\Scripts\python.exe -m tests.evaluate --model qwen3:0.6b   # comparer un autre modèle
 .\.venv\Scripts\python.exe -m tests.evaluate --attempts 1         # mesurer l'apport de la reformulation
+.\.venv\Scripts\python.exe -m tests.evaluate --department rh      # n'évaluer qu'un service (mesure rapide et ciblée)
 .\.venv\Scripts\python.exe -m tests.security_probe              # injection de prompt et cloisonnement (nécessite Ollama)
 .\.venv\Scripts\python.exe -m tests.registration_probe          # demande d'accès et approbation (sans Ollama)
 .\.venv\Scripts\python.exe -m tests.prompt_probe                # les consignes par service changent-elles les réponses (Ollama)
 .\.venv\Scripts\python.exe -m tests.glossary_probe              # le glossaire par service change-t-il le classement (Ollama, rapide)
 ```
 
-Le jeu d'évaluation distingue les questions **à formulation directe** (le vocabulaire de la question
-est celui du document) des questions **à formulation éloignée** (« depuis chez moi » pour
+Le jeu d'évaluation est **découpé par service**, et c'est le point : améliorer les réponses
+techniques peut dégrader les réponses RH sans que rien ne le signale, parce qu'une moyenne
+globale compense un service par un autre. Le relevé affiche donc une ligne par périmètre.
+
+Il distingue aussi les questions **à formulation directe** (le vocabulaire de la question est
+celui du document) des questions **à formulation éloignée** (« depuis chez moi » pour
 « télétravail ») : ce sont ces dernières qui mesurent l'apport du graphe de décision.
+
+Enfin, quatre questions sont **hors périmètre** : un agent pose une question légitime dont la
+réponse appartient à un autre service. Ce n'est pas le cas malveillant — `tests.security_probe`
+s'en charge — c'est le cas ordinaire, et ce qui se mesure est la tenue du refus.
 
 `tests.evaluate` est le garde-fou à lancer après tout changement de modèle, de découpage ou de seuil.
 

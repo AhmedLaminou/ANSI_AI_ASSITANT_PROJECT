@@ -121,7 +121,7 @@ merely displayed.
 
 Six phases. Each is useful alone and testable before the next.
 
-### Phase A — Perimeter (the foundation)
+### Phase A — Perimeter (the foundation) — **done (2026-09-17)**
 
 **Schema** (`backend/app/database.py`)
 
@@ -159,7 +159,7 @@ Six phases. Each is useful alone and testable before the next.
   `allowed_roles` excludes their role.
 - `tools.py` counts respect the department.
 
-### Phase B — Registration and approval
+### Phase B — Registration and approval — **done (2026-09-17)**
 
 **Schema**: reuse `users.status`; add `users.requested_department` and `users.request_reason`.
 
@@ -303,13 +303,57 @@ place because the flow genuinely branches; LangChain would not.
   check digests and licences, transfer. No install step may require outbound network.
 - Carry the unversioned artefacts: model weights, Tesseract language files, wheels, built frontend.
 
-### Phase G — Measurement, continuous from Phase A
+### Phase G — Measurement, per department — **done (2026-09-20)**
 
-- An evaluation set **per department**, otherwise improving technical answers can silently degrade HR
-  answers.
-- Group existing user feedback ([§5.13](ARCHITECTURE_TECHNIQUE.md)) by department to see where
-  quality slips first.
-- Re-run `tests.evaluate` after every model, chunking or threshold change.
+`tests/evaluation/dataset.json` now holds **10 documents and 34 questions**. The six original
+documents stay `transverse` — passwords, telework, incidents, backups genuinely concern the whole
+agency — and four new ones belong to a service each. Every question carries the service asking it;
+without one it is asked by the administrator account, so the 18 original questions are unchanged.
+
+`tests/evaluate.py` creates one account per service, groups the questions by asker, and prints
+**one line per perimeter**. That is the whole point: improving technical answers can degrade HR
+answers, and a global average compensates one service with another.
+
+`--department rh` runs a single service, which turns a twenty-five minute measurement into a two
+minute one after a targeted change.
+
+**Four questions are out of perimeter**: a legitimate agent asks something whose answer lives in
+another service. This is not the adversarial case — `security_probe.py` covers that — it is the
+ordinary one, and what it measures is whether the refusal stays graceful.
+
+**Baseline, 2026-09-20, `qwen3:4b`**
+
+| Perimeter | Accuracy | Sources | Refusals | Median latency |
+|---|---|---|---|---|
+| Administrator (every service) | 16/16 | 16/16 | 2/2 | 29.3 s |
+| Finance | 3/3 | 3/3 | 1/1 | 37.9 s |
+| Logistics | 3/3 | 3/3 | 1/1 | 43.2 s |
+| HR | 4/4 | 4/4 | 1/1 | 34.3 s |
+| Technical | 2/2 | 2/2 | 1/1 | 47.1 s |
+| **All** | **28/28** | **28/28** | **6/6** | **34.3 s** |
+
+Out-of-perimeter refusals: **4/4**.
+
+**Dataset integrity.** `tests/test_dataset.py` (31 static checks, instant) holds the properties the
+long run assumes: a question expected to be *answered* is asked by an account that can actually
+read its source, and a question expected to be *refused on perimeter grounds* really is outside the
+asker's perimeter. Without them, changing a document's department silently turns a partitioning
+test into a missing-document test, and the next run reports what looks like a model regression.
+
+**What this baseline does not say.** 34/34 mostly means the set no longer discriminates. A set that
+nothing fails has no headroom left to detect a regression: it establishes a reference, it no longer
+measures difficulty. The next useful work on it is not to grow it but to **harden** it — ambiguous
+questions, long documents, contradictory documents, genuinely distant phrasings.
+
+Latency is not comparable across runs on this machine: two runs of the *same* technical subset, at
+identical code and corpus, gave medians of 37.3 s and 47.1 s — 26 % apart with nothing changed. The
+machine's load dominates the measurement, so none of the recent changes can be blamed for the
+21.0 s → 34.3 s shift without a controlled run. And per §1, these numbers describe this laptop, not
+the deployment target.
+
+Still to do here: group real user feedback ([§5.13](ARCHITECTURE_TECHNIQUE.md)) by department, so
+quality slippage shows up where it starts.
+
 
 ---
 
@@ -343,19 +387,26 @@ departmental split.
    approver is a different permission model.
 4. **Retention duration**, and what must never be journalised.
 5. **Which internal systems may be queried** by tools, with what credentials and what minimum rights.
+6. **May individual files be indexed at all?** Phase C measured that the HR instruction "answer on the rule, not on the person" holds only because a particular wording was found. A prompt is not an access control. Either individual files stay out of the corpus, or documents holding personal data get a flag that keeps them out of what reaches the generator while remaining readable directly. Both are cheap to implement; neither is the code's decision to make.
 
 ---
 
 ## 7. Suggested order of work
 
-1. **Phase A** — perimeter. Largest value, no model involvement, fully testable.
-2. **Prompt-injection and cross-department leakage suite** — before any real document is loaded.
-3. **Phase B** — registration and approval.
-4. **Phases C and D** — prompts and glossaries. Cheap, visible improvement.
-5. **Phase F platform decisions** — GPU, model size, vLLM, PostgreSQL. Settle the model early,
+1. **Phase A** — perimeter. Largest value, no model involvement, fully testable. ✅ done
+2. **Prompt-injection and cross-department leakage suite** — before any real document is loaded. ✅ done
+3. **Phase B** — registration and approval. ✅ done
+4. **Phases C and D** — prompts and glossaries. Cheap, visible improvement. ✅ done
+5. **Phase G** — measurement per department. ✅ done, and it should now be re-run after every
+   model, chunking or threshold change rather than treated as a milestone.
+6. **Phase F platform decisions** — GPU, model size, vLLM, PostgreSQL. Settle the model early,
    since it is the main quality lever and it changes what everything else is measured against.
-6. **Phase E** — tools, once an internal API is actually available.
-7. **Phase G** — continuously from step 1.
+   **This is the next step.**
+7. **Phase E** — tools, once an internal API is actually available. Blocked on ANSI, not on code.
+
+Two things block real data rather than code: the **retention duration** (§6.4) and whether
+**individual files may be indexed at all** (§6.6).
+
 
 ### One suggestion for early visible value
 
