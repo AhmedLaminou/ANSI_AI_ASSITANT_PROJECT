@@ -161,6 +161,7 @@ Puis, depuis `backend`, avec Ollama démarré :
 .\.venv\Scripts\python.exe -m tests.registration_probe          # demande d'accès et approbation (sans Ollama)
 .\.venv\Scripts\python.exe -m tests.prompt_probe                # les consignes par service changent-elles les réponses (Ollama)
 .\.venv\Scripts\python.exe -m tests.glossary_probe              # le glossaire par service change-t-il le classement (Ollama, rapide)
+.\.venv\Scripts\python.exe -m tests.isolation_probe             # rien ne sort de la machine, rien de sensible dans les journaux
 ```
 
 Le jeu d'évaluation est **découpé par service**, et c'est le point : améliorer les réponses

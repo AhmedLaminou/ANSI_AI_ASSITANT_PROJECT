@@ -38,6 +38,7 @@ From `backend/`:
 .\.venv\Scripts\python.exe -m tests.security_probe              # prompt injection and cross-department leakage
 .\.venv\Scripts\python.exe -m tests.prompt_probe                # do the per-department prompts change the answers
 .\.venv\Scripts\python.exe -m tests.glossary_probe              # does the per-department glossary change the ranking
+.\.venv\Scripts\python.exe -m tests.isolation_probe            # no outbound traffic, no secrets in the logs
 .\.venv\Scripts\python.exe -m app.create_admin               # create an administrator
 .\.venv\Scripts\python.exe -m app.reset_password             # reset an account's password
 ```

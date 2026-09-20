@@ -937,21 +937,22 @@ Couverture de tests, hors ligne : **208 contrôles** — `tests/test_units.py` (
 d’intégrité du jeu d’évaluation).
 
 Sondes nécessitant Ollama : `tests/smoke_rag.py` (bout en bout), `tests/security_probe.py`
-(injection de prompt et fuite entre services), `tests/prompt_probe.py` (effet réel des consignes
-par service), `tests/glossary_probe.py` (effet du glossaire sur le classement, rapide car sans
-génération), `tests/registration_probe.py` (demande d'accès, sans Ollama).
+(injection de prompt et fuite entre services), `tests/isolation_probe.py` (réseau sortant et
+fuite dans les journaux), `tests/prompt_probe.py` (effet réel des consignes par service),
+`tests/glossary_probe.py` (effet du glossaire sur le classement, rapide car sans génération),
+`tests/registration_probe.py` (demande d'accès, sans Ollama).
 
-### 6.1 Tests exigés par le §35 du document de conception, non réalisés
+### 6.1 Tests exigés par le §35 du document de conception
 
-C'est la lacune la plus gênante du projet, et elle concerne précisément le métier de l'ANSI.
+Cette section était la lacune la plus gênante du projet. Elle l'est beaucoup moins : il reste les tests de **qualité** et l'escalade de privilèges.
 
 | Test demandé (§35 « Sécurité ») | État |
 |---|---|
 | **Injection de prompt** | ✅ **Testé** — `tests/security_probe.py`, 17 contrôles, 17 passés (2026-09-17) |
 | Tentative d'accès à un document interdit | ✅ **Testé** — `tests/test_access.py` (40 contrôles, toutes les paires de services) et `tests/security_probe.py` |
 | Données nominatives dans une réponse générée | ⚠️ **Mesuré, non garanti** — `tests/prompt_probe.py` ; tendance, pas contrôle d'accès (§2.4) |
-| Données sensibles dans les logs | ❌ Jamais vérifié |
-| Réseau sortant | ❌ Jamais vérifié (nécessite un déploiement) |
+| Données sensibles dans les logs | ✅ **Testé** — `tests/isolation_probe.py` : contenu de document, mot de passe (bon et erroné) et jeton de session absents des journaux |
+| Réseau sortant | ✅ **Testé** — `tests/isolation_probe.py` intercepte `httpx` et vérifie que **tout** hôte contacté pendant un parcours complet est une adresse de bouclage |
 | Authentification | ✅ Couvert |
 | Escalade de privilèges | ⚠️ Partiel : l'auto-blocage d'un administrateur est testé, pas le reste |
 
@@ -1001,22 +1002,40 @@ jetons/seconde, ni RAM/VRAM, ni nombre d'utilisateurs simultanés soutenables.
 
 ## 8. Ordre de travail recommandé
 
-Fait : harnais d'évaluation, streaming, versionnement, cycle de vie des comptes, limitation de débit,
-protection du formulaire de connexion, mécanisme de purge, OCR local, PostgreSQL + pgvector,
-graphe de décision avec reformulation, tests unitaires et d'intégration.
+**Fait** : harnais d'évaluation par service, streaming, versionnement, cycle de vie des comptes,
+limitation de débit, protection du formulaire de connexion, mécanisme de purge, OCR local,
+PostgreSQL + pgvector, graphe de décision avec reformulation, outils métier, cloisonnement par
+service, demande d'accès et approbation, consignes et glossaires par service, sondes d'injection de
+prompt — et 208 contrôles automatiques hors ligne.
 
-Reste, dans cet ordre :
+**Reste, dans cet ordre :**
 
-1. **Arbitrer la politique de rétention et de journalisation** — décision de gouvernance, pas de
-   code ; le mécanisme attend sa valeur. Bloquant pour toute donnée réelle.
-2. **Fiabiliser le refus** (§5.1) — le seuil de similarité ne sépare pas les questions répondables
-   des autres ; c'est le prompt qui refuse. Étoffer le jeu d'évaluation en questions sans réponse
-   pour mesurer ce comportement, qui est la vraie protection contre l'hallucination.
-3. **Benchmark de modèles sur le harnais** (§5.8) — en particulier un modèle sans raisonnement : les
-   jetons de raisonnement dominent la latence (§7.6).
-4. **Invalidation des sessions** après changement de mot de passe (§7.4).
-5. **Script de reprise SQLite → PostgreSQL** avant de basculer une base contenant de vrais documents.
-6. **Premier outil métier** — s'ajoute comme un nœud derrière un routeur dans le graphe existant.
-7. **SSO / LDAP**, puis **conteneurisation, supervision, sauvegardes** — chantier de mise en
-   production.
-8. **Alembic** en remplacement de `ensure_schema()` (§7.8).
+*Décisions à obtenir de l'ANSI — elles bloquent toute donnée réelle, pas le code*
+
+1. **Politique de rétention et de journalisation** — le mécanisme attend sa valeur (§5.6).
+2. **Les dossiers individuels peuvent-ils être indexés ?** La phase C a mesuré qu'une consigne
+   n'est pas un contrôle d'accès (§2.4). Soit ils restent hors du corpus, soit un indicateur les
+   exclut de ce qui parvient au générateur.
+
+*Vérifications jamais faites, et qui touchent à la promesse centrale du projet*
+
+3. ~~Fuite de données dans les journaux et réseau sortant~~ — **fait le 20/09**, `tests/isolation_probe.py`, 8 contrôles. « Rien ne sort de la machine » est désormais vérifié
+   sur le trafic réellement émis, pas sur la configuration.
+
+*Code*
+
+5. **Invalidation des sessions** après changement de mot de passe (§7.4). Trou réel : une session
+   compromise reste valide jusqu'à 8 h.
+6. **Durcir le jeu d'évaluation** (§5.8) — 34/34 signifie qu'il ne discrimine plus, donc qu'il ne
+   détecterait plus une régression.
+7. **Benchmark de modèles**, en particulier un modèle **sans raisonnement** : les jetons de
+   raisonnement dominent la latence (§7.6). Premier levier de qualité perçue.
+8. **Script de reprise SQLite → PostgreSQL** avant de basculer une base contenant de vrais documents.
+9. **Alembic** en remplacement de `ensure_schema()` (§7.8).
+
+*Mise en production*
+
+10. **SSO / LDAP**, puis **conteneurisation, supervision, sauvegardes**, procédure de mise à jour
+    hors ligne, tests de charge.
+11. **Limitation de débit partagée** (§7.9) et **pagination** de `GET /documents` (§7.3), le jour où
+    l'API est répliquée ou le corpus dépasse quelques centaines de documents.
