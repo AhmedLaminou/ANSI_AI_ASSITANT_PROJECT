@@ -60,12 +60,17 @@ donné 37,3 s puis 47,1 s de médiane, la charge de la machine dominant la mesur
 
 | Document | Contenu |
 |---|---|
-| [docs/A_PROPOS_DU_PROJET.md](docs/A_PROPOS_DU_PROJET.md) | Ce que fait réellement le projet, différence avec ChatGPT, apport pour l'ANSI, emplacement des modèles et des données |
-| [docs/ARCHITECTURE_TECHNIQUE.md](docs/ARCHITECTURE_TECHNIQUE.md) | Pipeline RAG détaillé, modèle de données, sécurité, et ce qui reste à faire (LangGraph, pgvector, OCR, SSO, déploiement) |
+| [explainer/FONCTIONNALITES.md](explainer/FONCTIONNALITES.md) | **Inventaire complet de ce qui est implémenté**, où est le code, ce qui le vérifie |
+| [explainer/DEPLOYMENT_ON_ANSI_SERVERS.md](explainer/DEPLOYMENT_ON_ANSI_SERVERS.md) | Mode opératoire de mise en production : colis hors ligne, PostgreSQL, systemd, nginx |
+| [plan/IDEAS.md](plan/IDEAS.md) | **Ce que devient l'assistant branché sur les données vivantes** : annuaire, absences, agenda, actualités, événements |
+| [docs/A_PROPOS_DU_PROJET.md](docs/A_PROPOS_DU_PROJET.md) | Ce que fait réellement le projet, différence avec ChatGPT, apport pour l'ANSI |
+| [docs/ARCHITECTURE_TECHNIQUE.md](docs/ARCHITECTURE_TECHNIQUE.md) | Pipeline RAG détaillé, cloisonnement, consignes et glossaires par service, mesures, dettes techniques |
+| [docs/FUTURE_IDEAS.md](docs/FUTURE_IDEAS.md) | Plan des phases A à G — en anglais, avec l'état de chacune |
 | [docs/TEST_PLAN.md](docs/TEST_PLAN.md) | Procédure de test fonctionnel, test des droits, test hors ligne |
 | [architecture_agent_ia_offline_ANSI.md](architecture_agent_ia_offline_ANSI.md) | Document de conception d'origine : théorie, risques, architecture cible |
 
-## Fonctionnalités du POC
+
+## Fonctionnalités
 
 ### Recherche documentaire
 
@@ -165,7 +170,7 @@ Puis, depuis `backend`, avec Ollama démarré :
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_units.py -q   # logique pure, rapide, sans Ollama
-.\.venv\Scripts\python.exe -m pytest tests/ -q                   # toute la suite hors ligne : 208 contrôles
+.\.venv\Scripts\python.exe -m pytest tests/ -q                   # toute la suite hors ligne : 278 contrôles
 .\.venv\Scripts\python.exe -m tests.smoke_rag                 # bout en bout, crée et supprime ses données
 .\.venv\Scripts\python.exe -m tests.evaluate                  # qualité par service (exactitude, sources, refus, latence)
 .\.venv\Scripts\python.exe -m tests.evaluate --model qwen3:0.6b   # comparer un autre modèle

@@ -578,5 +578,5 @@ médiane : la charge de la machine domine la mesure.
 
 **Mise en production :** voir [`DEPLOYMENT_ON_ANSI_SERVERS.md`](DEPLOYMENT_ON_ANSI_SERVERS.md).
 
-**Bloqué ailleurs :** les outils interrogeant les vrais systèmes ANSI (SIRH, inventaire) attendent
+**Bloqué ailleurs :** les outils interrogeant les vrais systèmes ANSI — annuaire, absences, agenda, actualités, inventaire — attendent qu'une API interne existe. Ce que cela changerait, source par source, est détaillé dans [`plan/IDEAS.md`](../plan/IDEAS.md).
 qu'une API interne existe.

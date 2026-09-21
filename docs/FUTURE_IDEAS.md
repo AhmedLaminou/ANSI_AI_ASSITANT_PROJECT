@@ -263,6 +263,10 @@ through `/search` and generates nothing, so it runs in seconds.
 
 ### Phase E — Tools and access to ANSI data
 
+> Explored in detail, source by source, in [`plan/IDEAS.md`](../plan/IDEAS.md) — directory,
+> absences, calendar, announcements, events, inventory, tickets, budget: what each makes
+> possible, what it must never do, and what it breaks in the current permission model.
+
 This is where departments earn their keep, and where "agents" stop being document search.
 
 | Department | Candidate tools | Source |

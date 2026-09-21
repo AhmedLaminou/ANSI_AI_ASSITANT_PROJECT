@@ -11,6 +11,11 @@ sur le réseau interne ANSI, sans accès Internet.
 > d'indexer le moindre document réel : la **durée de rétention** des conversations, et la question de
 > savoir si les **dossiers individuels** peuvent être indexés. Ce ne sont pas des paramètres
 > techniques. Voir la section 9.
+>
+> **Et une anticipation.** Brancher l'assistant sur les bases vivantes de l'agence — annuaire,
+> absences, agenda, actualités — change la donne sur les droits et sur la rétention. Les
+> conséquences sont examinées dans [`plan/IDEAS.md`](../plan/IDEAS.md) ; il vaut mieux les avoir
+> lues avant de dimensionner le serveur.
 
 ---
 
@@ -451,7 +456,7 @@ sudo -u ansi /opt/ansi-assistant/2026-10-15/backend/.venv/bin/python -m pip inst
 
 # 4. Vérifier avant de basculer
 cd /opt/ansi-assistant/2026-10-15/backend
-sudo -u ansi .venv/bin/python -m pytest tests/ -q          # 230 contrôles, sans modèle
+sudo -u ansi .venv/bin/python -m pytest tests/ -q          # 278 contrôles, sans modèle
 sudo -u ansi .venv/bin/python -m tests.isolation_probe     # rien ne sort
 sudo -u ansi .venv/bin/python -m tests.security_probe      # injection de prompt
 

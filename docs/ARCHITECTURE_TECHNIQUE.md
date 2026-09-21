@@ -484,10 +484,12 @@ vectoriel — il faut alors réindexer tous les documents.
 **État : implémenté** — [`backend/app/tools.py`](../backend/app/tools.py).
 
 « Combien d'utilisateurs sont enregistrés ? » (§9) est une requête, pas une recherche sémantique :
-la réponse n'est dans aucun document. Quatre outils répondent depuis la base :
+la réponse n'est dans aucun document — pas plus que « quels droits ai-je ? », qui se lit en base.
+**Cinq outils** y répondent directement :
 
 | Outil | Réponse | Rôles |
 |---|---|---|
+| `my_access` | rôle, service, ce que le compte lit **et ce qu'il ne lit pas** | tous |
 | `count_users` | comptes actifs par rôle | **admin uniquement** |
 | `count_documents` | documents accessibles, par classification | tous |
 | `list_documents` | titres accessibles au compte | tous |
