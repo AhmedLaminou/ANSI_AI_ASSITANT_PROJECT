@@ -973,13 +973,26 @@ def submit_feedback(
         .limit(1)
     ).first()
 
-    db.add(AnswerFeedback(
-        message_id=message.id,
-        user_id=user.id,
-        verdict=payload.verdict,
-        question=question.content if question else "",
-        comment=payload.comment.strip(),
-    ))
+    # One verdict per account and per answer: changing your mind replaces it.
+    # Appending instead produced rows saying the same answer was both wrong and
+    # useful, which then poisons whatever evaluation set is built from them.
+    existing = db.scalars(
+        select(AnswerFeedback)
+        .where(AnswerFeedback.message_id == message.id)
+        .where(AnswerFeedback.user_id == user.id)
+    ).first()
+    if existing is not None:
+        existing.verdict = payload.verdict
+        existing.comment = payload.comment.strip()
+        existing.created_at = datetime.now(timezone.utc)
+    else:
+        db.add(AnswerFeedback(
+            message_id=message.id,
+            user_id=user.id,
+            verdict=payload.verdict,
+            question=question.content if question else "",
+            comment=payload.comment.strip(),
+        ))
     db.add(AuditEvent(actor_id=user.id, document_id=None, event_type=f"feedback:{payload.verdict}"))
     db.commit()
 

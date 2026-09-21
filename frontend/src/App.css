@@ -1449,6 +1449,14 @@ legend {
   background: var(--card-alt);
 }
 
+/* An account with no department reads only transverse documents. Shown as a
+   warning rather than a neutral label, because it is usually an oversight. */
+.tag-department.none {
+  border-color: color-mix(in srgb, var(--warning, #b45309) 35%, transparent);
+  color: var(--warning, #b45309);
+  background: color-mix(in srgb, var(--warning, #b45309) 12%, transparent);
+}
+
 /* Keyboard hints in the navigation, kept quiet until hover or focus. */
 .nav-key {
   margin-left: auto;

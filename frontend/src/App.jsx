@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
@@ -97,11 +97,14 @@ function useTheme() {
 
 function useToasts() {
   const [toasts, setToasts] = useState([])
-  function push(message, tone = 'info') {
+  // Memoised on purpose: `push` is passed down as `onToast` and read by effect
+  // dependency lists. A fresh function on every render made those effects refire,
+  // which is what produced nine identical GET /documents in a row.
+  const push = useCallback((message, tone = 'info') => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
     setToasts((current) => [...current, { id, message, tone }])
     setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), 3600)
-  }
+  }, [])
   return { toasts, push }
 }
 
@@ -1153,6 +1156,10 @@ function UsersView({ user, onToast }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState('user')
+  // A department is not optional in the design: an account without one reads only
+  // transverse documents and lands as « Non rattaché ». The form used to omit it,
+  // so every account created here was born unattached.
+  const [department, setDepartment] = useState(DEPARTMENTS[0].value)
   const [error, setError] = useState('')
 
   async function loadUsers() {
@@ -1243,11 +1250,12 @@ function UsersView({ user, onToast }) {
       await request('/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password, role }),
+        body: JSON.stringify({ username, password, role, department }),
       })
       setUsername('')
       setPassword('')
       setRole('user')
+      setDepartment(DEPARTMENTS[0].value)
       await loadUsers()
       onToast(`Compte « ${username} » créé.`, 'success')
     } catch (requestError) {
@@ -1294,6 +1302,20 @@ function UsersView({ user, onToast }) {
               ))}
             </select>
           </label>
+          <label>
+            Service de rattachement
+            <select value={department} onChange={(event) => setDepartment(event.target.value)}>
+              {DEPARTMENTS.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="field-hint">
+            Le rôle dit ce que le compte peut faire, le service ce qu'il peut lire. Un compte sans
+            service ne voit que les documents transverses.
+          </p>
           {error && <p className="error">{error}</p>}
           <button className="primary">Créer le compte</button>
         </form>
@@ -1304,6 +1326,9 @@ function UsersView({ user, onToast }) {
               <div className="user-name">
                 <strong>{account.username}</strong>
                 <span className={`role-pill ${account.role}`}>{account.role}</span>
+                <span className={`tag-department ${account.department || 'none'}`}>
+                  {account.department_label || 'Non rattaché'}
+                </span>
                 {account.id === user.id && <span className="role-pill self">vous</span>}
               </div>
               <div className="user-actions">
@@ -1315,6 +1340,18 @@ function UsersView({ user, onToast }) {
                 >
                   {ROLES.map((value) => (
                     <option key={value}>{value}</option>
+                  ))}
+                </select>
+                <select
+                  value={account.department || ''}
+                  aria-label={`Service de ${account.username}`}
+                  onChange={(event) => updateAccount(account.id, { department: event.target.value })}
+                >
+                  {!account.department && <option value="">Non rattaché</option>}
+                  {DEPARTMENTS.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
                   ))}
                 </select>
                 <button
