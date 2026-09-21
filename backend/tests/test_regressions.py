@@ -29,6 +29,9 @@ PASSWORD = "RegressionTestPassword-2026"
 # tool, fell through to documentary search, retrieved unrelated extracts and was
 # refused — on an account that could in fact read three documents.
 
+ACCESS_TOOLS = {"list_documents", "my_access"}
+
+
 @pytest.mark.parametrize("question", [
     "Salut , dis moi les trucs sur lesquels j'ai accés en tant que \"user \" ?",
     "A quoi ai-je accès ?",
@@ -40,9 +43,16 @@ PASSWORD = "RegressionTestPassword-2026"
     "Liste des documents s'il te plaît",
     "Quels sont les documents auxquels j'ai accès ?",
 ])
-def test_asking_what_i_may_read_reaches_the_tool(question):
+def test_asking_what_i_may_read_reaches_a_tool(question):
+    """Never the documentary search, which is what produced the original refusal.
+
+    Which of the two tools answers is a later refinement: « à quoi ai-je accès »
+    went to `my_access`, which also states the role, the service and what the
+    account *cannot* see. `list_documents` keeps the questions that really ask for
+    a list. Both are correct answers to the defect; neither is a semantic search.
+    """
     tool = find_tool(question)
-    assert tool is not None and tool.name == "list_documents", question
+    assert tool is not None and tool.name in ACCESS_TOOLS, question
 
 
 @pytest.mark.parametrize("question", [

@@ -2088,3 +2088,256 @@ nav button.active .nav-key,
     margin-left: auto;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Administration : supervision, journal d'audit, retours.
+   Tableaux denses plutôt que cartes : un administrateur compare des lignes.
+   --------------------------------------------------------------------------- */
+
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card-alt);
+}
+
+.segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.segmented button:hover {
+  color: var(--text);
+}
+
+.segmented button.active {
+  background: var(--card);
+  color: var(--accent-text);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 8%);
+}
+
+.admin-panel > h3 {
+  margin: 28px 0 6px;
+}
+
+.admin-panel > h3:first-child {
+  margin-top: 0;
+}
+
+.figure-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.figure {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.figure.warn {
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+  background: color-mix(in srgb, var(--warning) 8%, var(--card));
+}
+
+.figure-value {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.figure-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.figure-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Les signaux disent ce que les chiffres impliquent, plutôt que de laisser
+   l'administrateur déduire un problème d'un zéro dans un tableau. */
+.signal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.signal {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.signal .icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.signal.warn {
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+  background: color-mix(in srgb, var(--warning) 9%, transparent);
+  color: var(--text);
+}
+
+.signal.ok {
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.signal.info {
+  background: var(--card-alt);
+  color: var(--text);
+}
+
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px;
+  margin: 18px 0 14px;
+}
+
+.filter-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.filter-row select {
+  min-width: 190px;
+}
+
+/* Un tableau reste lisible à l'étroit en défilant seul, sans pousser la page. */
+.table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.data-table th {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--card-alt);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.data-table td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.data-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.data-table tr.row-warn td {
+  background: color-mix(in srgb, var(--warning) 7%, transparent);
+}
+
+.data-table .nowrap {
+  white-space: nowrap;
+}
+
+.stat-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.stat-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+  background: var(--card);
+}
+
+.stat-list li:last-child {
+  border-bottom: 0;
+}
+
+.stat-list span {
+  color: var(--muted);
+}
+
+.warn-text {
+  color: var(--warning);
+}
+
+.admin-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 28px;
+  margin-top: 28px;
+}
+
+.verdict-pill {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.verdict-pill.wrong {
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+}
+
+.verdict-pill.useful {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}

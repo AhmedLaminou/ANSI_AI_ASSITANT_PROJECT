@@ -1,46 +1,57 @@
 # ANSI Local AI Assistant
 
-POC local et hors ligne d'un assistant documentaire pour l'ANSI.
+Assistant documentaire interne de l'ANSI, **local et hors ligne**.
 
-Il répond aux questions des agents **à partir des documents internes importés**, en citant ses sources,
-sans qu'aucune donnée ne quitte la machine, et en ne montrant à chaque utilisateur que les documents
-que son rôle autorise.
+Il répond aux questions des agents **à partir des documents internes importés**, en citant ses
+sources, sans qu'aucune donnée ne quitte la machine, et en ne montrant à chaque agent que les
+documents que **son rôle et son service** autorisent.
 
 > Ce n'est pas « un ChatGPT installé en local ». Le modèle de langage n'est qu'une pièce du système :
-> l'essentiel est la recherche documentaire, le contrôle d'accès et la traçabilité autour de lui.
-> Voir [docs/A_PROPOS_DU_PROJET.md](docs/A_PROPOS_DU_PROJET.md) pour la comparaison détaillée avec un
-> assistant générique.
+> l'essentiel est la recherche documentaire, le cloisonnement par service et la traçabilité autour de
+> lui. Voir [docs/A_PROPOS_DU_PROJET.md](docs/A_PROPOS_DU_PROJET.md) pour la comparaison détaillée,
+> et [explainer/FONCTIONNALITES.md](explainer/FONCTIONNALITES.md) pour l'inventaire complet.
 
-## Statut : preuve de concept
+## Statut
 
-**Ce dépôt n'est pas déployable en l'état sur l'infrastructure de l'ANSI.** Ce qui touche à l'IA et
-au contrôle d'accès fonctionne et est mesuré ; ce qui manque relève du déploiement, de la gouvernance
-et des tests de sécurité.
+**Les fonctions métier sont achevées, mesurées et testées. Ce qui reste relève du déploiement, de la
+gouvernance et de la montée en charge** — voir
+[explainer/DEPLOYMENT_ON_ANSI_SERVERS.md](explainer/DEPLOYMENT_ON_ANSI_SERVERS.md).
 
 | | État |
 |---|---|
-| Recherche documentaire, réponses sourcées, refus | ✅ Fonctionne, mesuré |
-| Authentification, rôles, cloisonnement par rôle | ✅ Fonctionne, testé |
-| Conteneurisation, reverse proxy, supervision, sauvegardes | ❌ Rien |
-| Politique de rétention et de journalisation | ❌ À arbitrer — **bloquant** |
-| Tests d'injection de prompt et de cloisonnement | ✅ 17 contrôles passés |
-| Tests de fuite par les logs et de réseau sortant | ❌ Jamais exécutés |
-| Outils métier (répondre depuis la base, pas les documents) | ✅ Quatre outils, droits appliqués |
-| Cloisonnement par service (4 services + transverse) | ✅ Appliqué avant la recherche, 40 tests |
+| Recherche documentaire, réponses sourcées, refus | ✅ Mesuré, 28/28 d'exactitude |
+| Authentification, rôles, cycle de vie des comptes | ✅ Testé |
+| Cloisonnement par service (4 services + transverse) | ✅ Appliqué avant la recherche, 40 contrôles |
 | Demande d'accès validée par l'administrateur | ✅ 16 contrôles |
-| Agents spécialisés : consignes et glossaires par service | ❌ Phases C et D — voir [docs/FUTURE_IDEAS.md](docs/FUTURE_IDEAS.md) |
+| Consignes par service (l'assistant de chaque métier) | ✅ 32 contrôles, effet mesuré |
+| Glossaires par service (« CP » ≠ « CP ») | ✅ 24 contrôles, effet mesuré |
+| Outils répondant depuis la base, pas les documents | ✅ Cinq outils, droits appliqués |
+| Supervision, journal d'audit et retours côté administrateur | ✅ Écran dédié, 28 contrôles |
+| Injection de prompt et fuite entre services | ✅ 17 contrôles |
+| Fuite par les journaux, réseau sortant | ✅ 8 contrôles, sur le trafic réellement émis |
+| Jeu d'évaluation **par service** | ✅ 34 questions, relevé par périmètre |
+| Invalidation des sessions après changement de mot de passe | ❌ **Trou connu** — jusqu'à 8 h |
+| Politique de rétention et de journalisation | ❌ À arbitrer — **bloquant pour les données réelles** |
+| Les dossiers individuels peuvent-ils être indexés ? | ❌ À arbitrer — une consigne ne protège pas |
+| Conteneurisation, reverse proxy, supervision, sauvegardes | ❌ Procédure écrite, jamais exécutée |
+| Tests de charge, mesures RAM/VRAM | ❌ Jamais faits |
 
-Les points non traités sont détaillés dans
-[docs/ARCHITECTURE_TECHNIQUE.md](docs/ARCHITECTURE_TECHNIQUE.md) §8. Tant qu'ils ne sont pas traités,
-n'utiliser que des documents non sensibles ou anonymisés.
+**220+ contrôles automatiques hors ligne**, plus six sondes nécessitant le modèle local.
+
+Le détail est dans [docs/ARCHITECTURE_TECHNIQUE.md](docs/ARCHITECTURE_TECHNIQUE.md) §8. Tant que les
+deux arbitrages ci-dessus ne sont pas rendus, n'utiliser que des documents non sensibles.
 
 ### Performances observées
 
 Sur un poste de développement (CPU, 16 Go partagés avec l'IDE et le navigateur), avec `qwen3:4b` :
-**≈ 21 s par réponse en médiane**. L'essentiel de ce temps n'est pas la recherche documentaire mais
+**≈ 34 s par réponse en médiane**. L'essentiel de ce temps n'est pas la recherche documentaire mais
 le raisonnement interne du modèle, généré puis jeté. Un modèle sans phase de raisonnement est la
-première piste d'accélération ; un GPU est nécessaire dès qu'il y a plusieurs utilisateurs
-simultanés, Ollama traitant les requêtes une par une.
+première piste d'accélération ; un GPU est nécessaire dès qu'il y a plusieurs agents simultanés,
+Ollama traitant les requêtes une par une.
+
+Ces chiffres décrivent **ce portable, pas la cible de déploiement** : deux exécutions identiques ont
+donné 37,3 s puis 47,1 s de médiane, la charge de la machine dominant la mesure.
+
 
 ## Documentation
 

@@ -1,76 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
-const ROLES = ['admin', 'document_manager', 'user']
-const CLASSIFICATIONS = ['interne', 'direction', 'confidentiel']
-
-// Mirrors backend/app/access.py. "transverse" is not a department: it is the
-// perimeter of documents that concern everyone.
-const DEPARTMENTS = [
-  { value: 'technique', label: 'Technique / informatique' },
-  { value: 'finance', label: 'Finance / comptabilité' },
-  { value: 'logistique', label: 'Logistique' },
-  { value: 'rh', label: 'Ressources humaines' },
-]
-const DOCUMENT_DEPARTMENTS = [...DEPARTMENTS, { value: 'transverse', label: 'Transverse (tous services)' }]
+import Administration from './Administration.jsx'
+import { useRoute } from './routing.js'
+import {
+  CLASSIFICATIONS,
+  DEPARTMENTS,
+  DOCUMENT_DEPARTMENTS,
+  Icon,
+  ROLES,
+  request,
+  streamChat,
+} from './shared.jsx'
 
 const TABS = [
   { id: 'overview', label: "Vue d'ensemble", icon: 'grid' },
   { id: 'chat', label: 'Assistant', icon: 'chat' },
   { id: 'documents', label: 'Documents', icon: 'folder' },
   { id: 'users', label: 'Utilisateurs', icon: 'users', admin: true },
+  { id: 'admin', label: 'Administration', icon: 'shield', admin: true },
 ]
-
-async function request(path, options = {}) {
-  const response = await fetch(`${API_URL}${path}`, { credentials: 'include', ...options })
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}))
-    throw new Error(body.detail ?? 'Une erreur est survenue.')
-  }
-  return response.status === 204 ? null : response.json()
-}
-
-/** Reads the NDJSON answer stream and hands each event to onEvent. */
-async function streamChat(body, onEvent) {
-  const response = await fetch(`${API_URL}/chat/stream`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!response.ok) {
-    const failure = await response.json().catch(() => ({}))
-    throw new Error(failure.detail ?? 'Une erreur est survenue.')
-  }
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() ?? ''
-    for (const line of lines) {
-      if (line.trim()) onEvent(JSON.parse(line))
-    }
-  }
-  if (buffer.trim()) onEvent(JSON.parse(buffer))
-}
-
-// ---------------------------------------------------------------------------
-// Small building blocks: icons, theme, toasts, rich-text rendering
-// ---------------------------------------------------------------------------
-
-function Icon({ name, className = '' }) {
-  return (
-    <svg className={`icon ${className}`} aria-hidden="true">
-      <use href={`/icons.svg#icon-${name}`} />
-    </svg>
-  )
-}
 
 function getInitialTheme() {
   try {
@@ -358,8 +307,19 @@ function Login({ onLogin, theme, onToggleTheme }) {
               onChange={(event) => setUsername(event.target.value)}
               autoComplete="username"
               minLength="3"
+              maxLength="64"
+              pattern={mode === 'register' ? '[A-Za-z0-9_.\-]+' : undefined}
+              title={mode === 'register'
+                ? 'Lettres non accentuées, chiffres, et les signes . - _ — ni espace, ni accent.'
+                : undefined}
               required
             />
+            {mode === 'register' && (
+              <span className="field-hint">
+                Lettres non accentuées, chiffres et les signes <code>.</code> <code>-</code>{' '}
+                <code>_</code>. Ni espace, ni accent.
+              </span>
+            )}
           </label>
           <label>
             Mot de passe
@@ -367,10 +327,14 @@ function Login({ onLogin, theme, onToggleTheme }) {
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
-              minLength="8"
+              autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+              minLength={mode === 'register' ? 12 : 8}
+              maxLength="128"
               required
             />
+            {mode === 'register' && (
+              <span className="field-hint">12 caractères minimum.</span>
+            )}
           </label>
           {mode === 'register' && (
             <>
@@ -415,7 +379,10 @@ function Login({ onLogin, theme, onToggleTheme }) {
           >
             {mode === 'register' ? "J'ai déjà un compte — me connecter" : "Pas encore de compte ? Demander un accès"}
           </button>
-          <p className="form-note">Ce POC ne transmet ni vos questions ni vos documents vers une API IA externe.</p>
+          <p className="form-note">
+            Ni vos questions ni vos documents ne quittent les serveurs de l'ANSI : aucun service
+            d'IA externe n'est appelé.
+          </p>
         </form>
       </section>
     </main>
@@ -475,7 +442,7 @@ function Overview({ documents, system, user, onNavigate }) {
           </button>
         </article>
         <article className="info-card tinted">
-          <p className="overline">GARDE-FOUS DU POC</p>
+          <p className="overline">GARANTIES DE L'ASSISTANT</p>
           <ul className="check-list">
             <li>
               <Icon name="check" />
@@ -483,11 +450,11 @@ function Overview({ documents, system, user, onNavigate }) {
             </li>
             <li>
               <Icon name="check" />
-              Les rôles filtrent les documents avant la recherche.
+              Rôle et service filtrent les documents avant la recherche, dans le code.
             </li>
             <li>
               <Icon name="check" />
-              Les PDF scannés nécessitent encore un OCR local.
+              Les PDF scannés sont reconnus localement, sans service en ligne.
             </li>
             <li>
               <Icon name="check" />
@@ -1077,7 +1044,7 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
             <p>
               {documents.length
                 ? 'Modifiez votre recherche ou votre filtre.'
-                : 'Importez 10 à 50 documents de démonstration non sensibles pour réaliser le POC ANSI.'}
+                : "Importez les procédures du service pour que ses agents puissent les interroger."}
             </p>
           </div>
         ) : (
@@ -1382,7 +1349,11 @@ function App() {
   const [activeConversation, setActiveConversation] = useState(null)
   const [messages, setMessages] = useState([])
   const [streaming, setStreaming] = useState(null)
-  const [tab, setTab] = useState('overview')
+  // The section lives in the URL, so /administration/retours is a real address
+  // an administrator can bookmark or share.
+  const [route, navigate] = useRoute()
+  const tab = route.tab
+  const setTab = navigate
   const [loadError, setLoadError] = useState('')
   const [theme, toggleTheme] = useTheme()
   const [showShortcuts, setShowShortcuts] = useState(false)
@@ -1535,7 +1506,7 @@ function App() {
             <button
               key={item.id}
               className={tab === item.id ? 'active' : ''}
-              onClick={() => setTab(item.id)}
+              onClick={() => navigate(item.id)}
               title={`${item.label} (Alt+${index + 1})`}
             >
               <Icon name={item.icon} />
@@ -1589,6 +1560,14 @@ function App() {
           <DocumentsView user={user} documents={documents} onRefresh={refreshDocuments} onToast={pushToast} />
         )}
         {tab === 'users' && <UsersView user={user} onToast={pushToast} />}
+        {tab === 'admin' && (
+          <Administration
+            user={user}
+            section={route.section ?? 'supervision'}
+            onSection={(section) => navigate('admin', section)}
+            onToast={pushToast}
+          />
+        )}
       </section>
       <ShortcutHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       <ToastStack toasts={toasts} />

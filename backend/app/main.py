@@ -11,9 +11,10 @@ from pathlib import Path
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .auth import create_access_token, get_current_user, password_hash, require_roles, verify_password
@@ -291,6 +292,66 @@ app.add_middleware(
     allow_headers=["Content-Type"],
     **cors_policy(settings.app_env, settings.frontend_origin),
 )
+
+
+# Field names as an agent would name them, not as the schema spells them.
+FIELD_LABELS: dict[str, str] = {
+    "username": "L'identifiant",
+    "password": "Le mot de passe",
+    "requested_department": "Le service demandé",
+    "department": "Le service",
+    "role": "Le rôle",
+    "reason": "Le motif",
+    "title": "Le titre",
+    "message": "La question",
+    "query": "La recherche",
+    "verdict": "L'avis",
+    "comment": "Le commentaire",
+    "classification": "La classification",
+    "allowed_roles": "Les rôles autorisés",
+}
+
+
+def explain_validation_error(error: dict[str, object]) -> str:
+    """One Pydantic error, in a sentence an agent can act on."""
+    location = [part for part in error.get("loc", ()) if part != "body"]
+    field = FIELD_LABELS.get(str(location[-1]) if location else "", "Un champ obligatoire")
+    kind = error.get("type", "")
+    context = error.get("ctx") or {}
+
+    if kind == "missing":
+        return f"{field} est obligatoire."
+    if kind == "string_too_short":
+        return f"{field} doit contenir au moins {context.get('min_length', '?')} caractères."
+    if kind == "string_too_long":
+        return f"{field} ne doit pas dépasser {context.get('max_length', '?')} caractères."
+    if kind == "string_pattern_mismatch":
+        if location and location[-1] == "username":
+            # The commonest failure by far: a space or an accent in the username.
+            return ("L'identifiant ne peut contenir que des lettres non accentuées, des chiffres, "
+                    "et les signes « . » « - » « _ » — ni espace, ni accent.")
+        return f"{field} contient des caractères non autorisés."
+    return f"{field} est invalide."
+
+
+@app.exception_handler(RequestValidationError)
+async def readable_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+    """Turns Pydantic's error list into a single readable sentence.
+
+    Without this, `detail` is a list of objects. The interface displays
+    `detail` directly, so an agent whose password was too short saw either nothing
+    or « [object Object] » — and kept resubmitting the same form. Observed in
+    production of the POC: seven consecutive 422 on /auth/register.
+
+    Making `detail` always a string is also a contract worth having: every caller
+    can render an error the same way.
+    """
+    messages: list[str] = []
+    for error in exc.errors():
+        sentence = explain_validation_error(error)
+        if sentence not in messages:
+            messages.append(sentence)
+    return JSONResponse(status_code=422, content={"detail": " ".join(messages)})
 
 
 def document_summary(document: DocumentRecord) -> dict[str, object]:
@@ -1003,16 +1064,183 @@ def list_feedback(
 ) -> list[dict[str, object]]:
     """Collected verdicts, newest first — the raw material for a real evaluation set."""
     entries = db.scalars(select(AnswerFeedback).order_by(AnswerFeedback.created_at.desc()).limit(200)).all()
+    authors = {
+        account.id: account.username
+        for account in db.scalars(select(User).where(User.id.in_({entry.user_id for entry in entries}))).all()
+    } if entries else {}
     return [
         {
             "id": entry.id,
             "verdict": entry.verdict,
             "question": entry.question,
             "comment": entry.comment,
+            "author": authors.get(entry.user_id, "compte supprimé"),
             "created_at": entry.created_at.isoformat(),
         }
         for entry in entries
     ]
+
+
+# Audit events are written by a dozen call sites and, until now, read by none.
+# An audit trail nobody can consult is not an audit trail.
+AUDIT_LABELS: dict[str, str] = {
+    "document_uploaded": "Document importé",
+    "document_deleted": "Document supprimé",
+    "document_question_answered": "Question répondue sur document",
+    "login_failed": "Tentative de connexion échouée",
+    "user_created": "Compte créé",
+    "user_updated": "Compte modifié",
+    "user_password_reset": "Mot de passe réinitialisé",
+    "registration_approved": "Demande d'accès approuvée",
+    "registration_refused": "Demande d'accès refusée",
+}
+
+
+def audit_label(event_type: str) -> str:
+    if event_type.startswith("tool_invoked:"):
+        return f"Outil exécuté ({event_type.split(':', 1)[1]})"
+    if event_type.startswith("feedback:"):
+        verdict = event_type.split(":", 1)[1]
+        return "Réponse marquée utile" if verdict == "useful" else "Réponse signalée incorrecte"
+    return AUDIT_LABELS.get(event_type, event_type)
+
+
+@app.get("/admin/audit")
+def list_audit_events(
+    _: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+    limit: int = 100,
+    event_type: str | None = None,
+    actor_id: int | None = None,
+) -> dict[str, object]:
+    """The audit trail, newest first, with the actor and document resolved.
+
+    Filters are applied in SQL rather than after the fact, so a narrow filter over a
+    long history stays cheap.
+    """
+    limit = max(1, min(limit, 500))
+    query = select(AuditEvent).order_by(AuditEvent.id.desc())
+    if event_type:
+        # Prefix match so "tool_invoked" catches "tool_invoked:count_users".
+        query = query.where(AuditEvent.event_type.startswith(event_type))
+    if actor_id is not None:
+        query = query.where(AuditEvent.actor_id == actor_id)
+    events = db.scalars(query.limit(limit)).all()
+
+    actors = {
+        account.id: account
+        for account in db.scalars(select(User).where(User.id.in_({event.actor_id for event in events}))).all()
+    } if events else {}
+    document_ids = {event.document_id for event in events if event.document_id}
+    documents = {
+        document.id: document.title
+        for document in db.scalars(select(DocumentRecord).where(DocumentRecord.id.in_(document_ids))).all()
+    } if document_ids else {}
+
+    return {
+        "total": db.scalar(select(func.count()).select_from(AuditEvent)) or 0,
+        "kinds": sorted({event.event_type.split(":", 1)[0] for event in events}),
+        "events": [
+            {
+                "id": event.id,
+                "event_type": event.event_type,
+                "label": audit_label(event.event_type),
+                "actor": actors[event.actor_id].username if event.actor_id in actors else "compte supprimé",
+                "actor_id": event.actor_id,
+                "actor_department": department_label(actors[event.actor_id].department)
+                if event.actor_id in actors else None,
+                "document": documents.get(event.document_id) if event.document_id else None,
+                "created_at": event.created_at.isoformat(),
+            }
+            for event in events
+        ],
+    }
+
+
+@app.get("/admin/overview")
+def administration_overview(
+    _: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Everything an administrator needs on one screen, service by service.
+
+    The per-department breakdown is the point: a service with accounts but no
+    document, or documents but no account, is an operational problem that a global
+    total hides completely.
+    """
+    documents = db.scalars(select(DocumentRecord).where(DocumentRecord.is_current.is_(True))).all()
+    accounts = db.scalars(select(User)).all()
+    chunk_counts = dict(
+        db.execute(
+            select(DocumentChunk.document_id, func.count(DocumentChunk.id)).group_by(DocumentChunk.document_id)
+        ).all()
+    )
+
+    per_department: list[dict[str, object]] = []
+    for name in sorted(DOCUMENT_DEPARTMENTS):
+        owned = [document for document in documents if document.department == name]
+        members = [account for account in accounts if account.department == name]
+        per_department.append({
+            "value": name,
+            "label": department_label(name),
+            "documents": len(owned),
+            "chunks": sum(chunk_counts.get(document.id, 0) for document in owned),
+            # "transverse" is a document perimeter, not a service: nobody belongs to it.
+            "accounts": None if name == TRANSVERSE else len(members),
+            "last_import": max((d.created_at for d in owned), default=None).isoformat() if owned else None,
+        })
+
+    by_role: dict[str, int] = {}
+    for account in accounts:
+        if account.is_active and account.status == "active":
+            by_role[account.role] = by_role.get(account.role, 0) + 1
+    by_classification: dict[str, int] = {}
+    for document in documents:
+        by_classification[document.classification] = by_classification.get(document.classification, 0) + 1
+
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    recent = db.scalars(select(AuditEvent).where(AuditEvent.created_at >= since)).all()
+    activity: dict[str, int] = {}
+    for event in recent:
+        key = event.event_type.split(":", 1)[0]
+        activity[key] = activity.get(key, 0) + 1
+
+    verdicts = db.scalars(select(AnswerFeedback)).all()
+    expired = [document for document in documents if is_expired(document)]
+
+    return {
+        "documents": {
+            "total": len(documents),
+            "chunks": sum(chunk_counts.get(document.id, 0) for document in documents),
+            "by_classification": by_classification,
+            "expired": len(expired),
+            "last_import": max((d.created_at for d in documents), default=None).isoformat() if documents else None,
+        },
+        "accounts": {
+            "total": len(accounts),
+            "active": len([a for a in accounts if a.is_active and a.status == "active"]),
+            "pending": len([a for a in accounts if a.status == "pending"]),
+            "refused": len([a for a in accounts if a.status == "refused"]),
+            "suspended": len([a for a in accounts if not a.is_active]),
+            # An account with no department reads only transverse documents. Almost
+            # always an oversight, so it is surfaced rather than merely stored.
+            "unattached": len([a for a in accounts if a.department is None and a.status == "active"]),
+            "by_role": by_role,
+        },
+        "departments": per_department,
+        "feedback": {
+            "useful": len([v for v in verdicts if v.verdict == "useful"]),
+            "wrong": len([v for v in verdicts if v.verdict == "wrong"]),
+        },
+        "activity_7d": activity,
+        "model": {
+            "chat": get_settings().ollama_chat_model,
+            "embedding": get_settings().ollama_embedding_model,
+            "ocr": ocr_available(),
+            "database": "PostgreSQL + pgvector" if get_settings().database_url else "SQLite",
+            "retention_days": get_settings().conversation_retention_days,
+        },
+    }
 
 
 @app.post("/auth/register", status_code=status.HTTP_202_ACCEPTED)

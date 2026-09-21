@@ -647,6 +647,25 @@ Ce qui reste à décider — et qui **ne peut pas l'être par défaut** :
 
 C'est le dernier point bloquant avant de traiter des documents réels.
 
+
+#### Le journal est désormais consultable
+
+Les événements d'audit étaient écrits par une douzaine d'appels et **lus par aucun** : aucun point
+d'entrée ne les exposait. Un journal que personne ne peut consulter n'est pas un journal.
+
+`GET /admin/audit` les renvoie, du plus récent au plus ancien, avec l'auteur et le document résolus,
+et un filtre par préfixe de type — `tool_invoked` attrape `tool_invoked:count_users`. Le filtrage se
+fait en SQL et non après coup, pour qu'un filtre étroit sur un historique long reste peu coûteux.
+
+`GET /admin/overview` agrège l'état de l'agence **service par service** : documents, extraits,
+comptes rattachés, dernier import. Le découpage par périmètre est le point : un service avec des
+comptes mais sans corpus, ou l'inverse, est un problème d'exploitation qu'un total global masque
+entièrement.
+
+**Dette introduite :** le journal affiche le service *actuel* de l'auteur, pas celui qu'il portait au
+moment de l'événement. Figer l'état historique demanderait de le copier à l'écriture — à décider
+avec la politique de rétention.
+
 ### 5.7 Déploiement — à quoi ressemblerait la version réelle
 
 **État : non implémenté.** Aujourd'hui : deux processus lancés à la main, un serveur de
@@ -922,7 +941,8 @@ Correspondance avec les phases du document d'architecture (§34).
 | 4 | Limitation de débit des questions | ✅ Fait (§5.10) |
 | 4 | Protection contre le forçage de mot de passe | ✅ Fait (§5.9) |
 | 4 | Mécanisme de purge de l'historique | ✅ Fait (§5.6) |
-| 4 | Journal d'audit | ⚠️ Basique |
+| 4 | Journal d'audit, écrit **et consultable** (§5.6) | ✅ Fait |
+| 5 | Supervision par service côté administrateur | ✅ Fait (§5.6) |
 | 4 | Invalidation des sessions après changement de mot de passe | ❌ À faire (§7.4) |
 | 4 | **Politique** de rétention et de journalisation | ❌ À arbitrer — **bloquant pour la production** |
 | 4 | SSO / LDAP | ❌ À faire |
@@ -930,11 +950,12 @@ Correspondance avec les phases du document d'architecture (§34).
 | 5 | Procédure de mise à jour hors ligne | ❌ À faire |
 | 5 | Tests de charge et de sécurité | ❌ À faire |
 
-Couverture de tests, hors ligne : **208 contrôles** — `tests/test_units.py` (logique pure),
+Couverture de tests, hors ligne : **258 contrôles** — `tests/test_units.py` (logique pure),
 `tests/test_access.py` (40 contrôles de périmètre, toutes les paires de services dans les deux sens),
 `tests/test_prompts.py` (32 contrôles sur la composition des consignes), `tests/test_glossary.py`
-(24 contrôles sur les glossaires par service) et `tests/test_dataset.py` (31 contrôles
-d’intégrité du jeu d’évaluation).
+(24 contrôles sur les glossaires par service), `tests/test_dataset.py` (31 contrôles
+d'intégrité du jeu d'évaluation), `tests/test_regressions.py` (défauts trouvés en usage) et
+`tests/test_administration.py` (28 contrôles sur la supervision et les erreurs lisibles).
 
 Sondes nécessitant Ollama : `tests/smoke_rag.py` (bout en bout), `tests/security_probe.py`
 (injection de prompt et fuite entre services), `tests/isolation_probe.py` (réseau sortant et
@@ -997,6 +1018,12 @@ jetons/seconde, ni RAM/VRAM, ni nombre d'utilisateurs simultanés soutenables.
     configurable (`CHAT_TIMEOUT_SECONDS`) précisément parce qu'un poste chargé dépasse facilement
     trois minutes. Ce n'est pas un défaut du code : c'est la démonstration qu'un serveur dédié, avec
     GPU, est nécessaire avant tout usage réel.
+12. **Le journal d'audit porte les attributs actuels de l'auteur**, pas ceux qu'il avait au moment
+    de l'événement. Un agent transféré des RH aux finances apparaît rétroactivement aux finances
+    sur toutes ses actions passées. Figer l'état demanderait de le copier à l'écriture.
+13. **Le routage de l'interface n'est pas protégé côté serveur** — il ne l'a pas à être : chaque
+    point d'entrée d'administration vérifie le rôle indépendamment de l'écran affiché. Une URL
+    devinée ne donne donc rien de plus qu'un écran vide.
 
 ---
 

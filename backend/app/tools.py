@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .database import DocumentChunk, DocumentRecord, User
-from .access import can_access_document
+from .access import DEPARTMENTS, can_access_document, department_label, sees_every_department
 
 
 def normalise(text: str) -> str:
@@ -102,6 +102,77 @@ def corpus_statistics(db: Session, user: User) -> str:
     )
 
 
+ROLE_RIGHTS: dict[str, tuple[str, ...]] = {
+    "user": (
+        "poser des questions et consulter les documents autorisés à votre compte",
+    ),
+    "document_manager": (
+        "poser des questions et consulter les documents autorisés à votre compte",
+        "importer de nouveaux documents et en choisir le service et les rôles autorisés",
+        "supprimer un document que vous avez importé",
+    ),
+    "admin": (
+        "poser des questions et consulter les documents de tous les services",
+        "importer, versionner et supprimer des documents",
+        "créer des comptes, attribuer un rôle et un service, réinitialiser un mot de passe",
+        "approuver ou refuser les demandes d'accès",
+        "consulter le journal d'audit et les avis laissés sur les réponses",
+    ),
+}
+
+
+def my_access(db: Session, user: User) -> str:
+    """« Quels droits ai-je ? » — le périmètre du compte, y compris ce qu'il ne voit pas.
+
+    Cette question n'a de réponse dans aucun document : elle se lit dans la base. La
+    laisser partir en recherche documentaire produisait un refus sur un compte qui
+    avait pourtant des droits — observé en session réelle.
+
+    Dire explicitement ce que le compte **ne voit pas** est la moitié utile de la
+    réponse : un agent qui ignore qu'un périmètre existe croit que le corpus est vide.
+    """
+    lines = [
+        f"Votre compte « {user.username} » a le rôle **{user.role}** "
+        f"et appartient au service **{department_label(user.department)}**.",
+        "",
+        "Ce que votre rôle vous permet :",
+    ]
+    lines += [f"- {right}" for right in ROLE_RIGHTS.get(user.role, ROLE_RIGHTS["user"])]
+
+    documents = visible_documents(db, user)
+    lines.append("")
+    if documents:
+        by_department: dict[str, int] = {}
+        for document in documents:
+            by_department[document.department] = by_department.get(document.department, 0) + 1
+        detail = ", ".join(
+            f"{count} en « {department_label(name)} »" for name, count in sorted(by_department.items())
+        )
+        lines.append(f"Vous pouvez interroger **{len(documents)} document(s)** : {detail}.")
+        lines += [f"- {document.title}" for document in sorted(documents, key=lambda d: d.title.lower())[:10]]
+        if len(documents) > 10:
+            lines.append(f"- … et {len(documents) - 10} autre(s)")
+    else:
+        lines.append("Aucun document n'est actuellement accessible à votre compte.")
+
+    lines.append("")
+    if sees_every_department(user):
+        lines.append(
+            "En tant qu'administrateur, vous lisez tous les services. C'est la seule exception "
+            "au cloisonnement, et elle n'est pas transitive : un document dont les rôles "
+            "autorisés vous excluent reste hors de portée."
+        )
+    else:
+        others = sorted(DEPARTMENTS - {user.department or ""})
+        lines.append(
+            "Ce que vous **ne voyez pas** : les documents des services "
+            + ", ".join(f"« {department_label(name)} »" for name in others)
+            + ". Les documents « Transverse » restent lisibles par tout le monde. "
+            "Pour un document d'un autre service, adressez-vous à l'administrateur."
+        )
+    return "\n".join(lines)
+
+
 EVERYONE = frozenset({"admin", "document_manager", "user"})
 
 TOOLS: tuple[Tool, ...] = (
@@ -142,22 +213,44 @@ TOOLS: tuple[Tool, ...] = (
             "liste les documents",
             "quels fichiers",
             "a quels documents",
-            "a quoi ai je acces",
-            "a quoi j ai acces",
-            "sur lesquels j ai acces",
-            "auxquels j ai acces",
-            "auquel j ai acces",
-            "ce a quoi j ai acces",
-            "que puis je consulter",
-            "que puis je lire",
-            "qu est ce que je peux consulter",
-            "qu est ce que je peux lire",
             "mes documents",
             "documents accessibles",
             "documents auxquels",
         ),
         roles=EVERYONE,
         run=list_documents,
+    ),
+    Tool(
+        name="my_access",
+        description="Rôle, service et périmètre de lecture du compte",
+        patterns=(
+            "quels droits",
+            "quel droit",
+            "mes droits",
+            "mes acces",
+            "mon acces",
+            "quels sont mes droits",
+            "a quoi ai je droit",
+            "que puis je faire",
+            "qu est ce que je peux faire",
+            "quel est mon role",
+            "quel est mon service",
+            "mon perimetre",
+            "a quel service j appartiens",
+            "a quel service appartient mon compte",
+            "que puis je consulter",
+            "que puis je lire",
+            "qu est ce que je peux consulter",
+            "qu est ce que je peux lire",
+            "a quoi ai je acces",
+            "a quoi j ai acces",
+            "sur lesquels j ai acces",
+            "auxquels j ai acces",
+            "auquel j ai acces",
+            "ce a quoi j ai acces",
+        ),
+        roles=EVERYONE,
+        run=my_access,
     ),
     Tool(
         name="corpus_statistics",

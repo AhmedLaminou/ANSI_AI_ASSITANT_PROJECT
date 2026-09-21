@@ -256,11 +256,12 @@ Le classement s'inverse, à corpus et périmètre identiques.
 
 ## 6. Ne pas envoyer une requête là où une question suffit
 
-« Combien d'utilisateurs sont enregistrés ? » n'est pas une recherche documentaire : la réponse
+« Combien d'utilisateurs sont enregistrés ? » ou « quels droits ai-je ? » ne sont pas des recherches documentaires : la réponse n'est dans aucun document. **Cinq outils** répondent directement depuis la base.
 n'est dans aucun document. Quatre **outils** répondent directement depuis la base.
 
 | Outil | Réponse | Rôles |
 |---|---|---|
+| `my_access` | rôle, service, ce que le compte lit **et ce qu'il ne lit pas** | tous |
 | `count_users` | comptes actifs par rôle | **administrateur seulement** |
 | `count_documents` | documents accessibles, par classification | tous |
 | `list_documents` | titres accessibles au compte | tous |
@@ -277,9 +278,14 @@ Quatre contraintes, toutes délibérées :
 - **Chaque outil ne voit que ce que son appelant peut voir.**
 - **Aucun SQL libre.** Chaque outil est une fonction fixe, sans paramètre issu de la question.
 
-> **Corrigé le 21/09** : « dis-moi les trucs sur lesquels j'ai accès » ne correspondait à aucun
-> motif et partait en recherche documentaire, pour finir en refus — sur un compte qui pouvait lire
-> trois documents. Quinze formulations naturelles rejoignent maintenant `list_documents`.
+> **Deux corrections venues de l'usage, pas de la relecture.** « Dis-moi les trucs sur lesquels
+> j'ai accès » ne correspondait à aucun motif et partait en recherche documentaire, pour finir en
+> refus — sur un compte qui pouvait lire trois documents. Puis « Quels droits ai-je ? », posée par
+> un administrateur, a reçu une réponse citant un ouvrage sur l'histoire des mathématiques.
+>
+> L'outil `my_access` répond désormais à cette famille de questions, et il dit surtout **ce que le
+> compte ne voit pas** : un agent qui ignore qu'un périmètre existe croit simplement que le corpus
+> est vide. C'est la moitié utile de la réponse.
 
 ---
 
@@ -352,7 +358,7 @@ ni en réponse directe ni en streaming.
   six derniers messages, sans partage entre comptes.
 - **Documents** : liste, recherche, filtrage par classification **et par service**, aperçu autorisé,
   historique des versions.
-- **Utilisateurs** (administrateur) : file des demandes d'accès, création de compte avec rôle et
+- **Utilisateurs** (administrateur) : file des demandes d'accès, création de compte avec rôle **et** service, rattachement d'un compte existant, activation/désactivation, réinitialisation.
   service, rattachement d'un compte existant, activation/désactivation, réinitialisation.
 - Écran d'accueil listant **les documents réellement interrogeables** par le compte connecté, pour
   que le périmètre soit visible avant la première question.
@@ -362,11 +368,61 @@ ni en réponse directe ni en streaming.
 
 ---
 
+### L'écran d'administration
+
+Un écran dédié, en trois volets, construit autour d'une idée : **un administrateur a besoin de voir
+l'agence service par service, pas en total**. Un corpus de 40 documents paraît sain jusqu'à ce qu'on
+remarque que 38 sont transverses et que la logistique n'a rien — ce qu'un chiffre global masque.
+
+**Supervision** — documents indexés, comptes actifs, demandes en attente, réponses signalées ; puis
+la répartition par service : documents, extraits indexés, comptes rattachés, dernier import. Un
+service sans document apparaît en surbrillance.
+
+L'écran énonce aussi ce que les chiffres **impliquent**, au lieu de laisser déduire un problème d'un
+zéro dans un tableau :
+
+- des services sans aucun document, dont les agents ne liront que le transverse ;
+- des comptes rattachés à un service qui n'a pas de corpus ;
+- des comptes actifs sans service ;
+- des documents dépassant leur date de validité ;
+- une durée de rétention non fixée.
+
+**Journal d'audit** — chaque import, suppression, question répondue, appel d'outil, modification de
+compte et tentative de connexion échouée laisse une trace, filtrable par type. Ces événements étaient
+écrits par une douzaine d'endroits et **lus par aucun** : un journal que personne ne peut consulter
+n'est pas un journal.
+
+**Retours sur les réponses** — voir la section 10.
+
+> **Limite connue :** le journal affiche le service **actuel** de l'auteur, pas celui qu'il avait au
+> moment de l'événement. Conserver l'état historique demanderait de le figer à l'écriture.
+
+### Des adresses réelles
+
+Chaque section a son URL — `/assistant`, `/documents`, `/utilisateurs`, `/administration`,
+`/administration/journal`, `/administration/retours`. Un administrateur peut mettre une page en
+favori ou l'envoyer à un collègue. Les adresses anglaises que l'on tape naturellement
+(`/admin`, `/admin/feedback`, `/admin/audit`) redirigent vers la forme canonique.
+
+Aucune bibliothèque de routage n'a été ajoutée : l'API History du navigateur et un écouteur
+suffisent, et un déploiement hors ligne a un paquet de moins à embarquer.
+
+### Des erreurs lisibles
+
+L'API renvoie toujours `detail` sous forme de **phrase**, y compris pour une erreur de validation.
+Auparavant c'était une liste d'objets que l'interface affichait telle quelle : un agent dont le mot
+de passe était trop court ne voyait rien d'exploitable et resoumettait le même formulaire. Sept
+demandes d'accès refusées d'affilée ont été observées avant que la cause soit trouvée.
+
+Le formulaire annonce aussi ses règles avant la soumission : 12 caractères minimum, et un identifiant
+sans espace ni accent.
+
+
 ## 10. Le retour utilisateur — et ce qu'il fait vraiment
 
 Un clic marque une réponse **utile** ou **incorrecte**.
 
-**Ce qui se passe :** l'avis est enregistré dans la table `answer_feedback` avec la question, le
+**Ce qui se passe :** l'avis est enregistré dans la table `answer_feedback` avec la question, le verdict, l'auteur et la date, plus une entrée au journal d'audit. Un administrateur les relit dans **Administration → Retours sur les réponses**, filtrables par verdict.
 verdict, l'auteur et la date, plus une entrée au journal d'audit. Un administrateur peut relire
 l'ensemble.
 
@@ -446,12 +502,14 @@ médiane : la charge de la machine domine la mesure.
 | Fuite dans les journaux | ✅ contenu, mots de passe, jeton |
 | Authentification | ✅ |
 | Demande d'accès et approbation | ✅ 16 contrôles |
+| Supervision, journal d'audit, retours | ✅ 28 contrôles |
+| Erreurs de validation lisibles par l'agent | ✅ 22 contrôles de régression |
 | Données nominatives dans une réponse | ⚠️ **mesuré, non garanti** — tendance, pas contrôle d'accès |
 | Escalade de privilèges | ⚠️ partiel |
 | Questions ambiguës, documents longs, documents contradictoires | ❌ aucun jeu de données |
 | Invalidation de session après changement de mot de passe | ❌ **trou réel** : une session compromise reste valide jusqu'à 8 h |
 
-**230 contrôles automatiques hors ligne**, plus cinq sondes nécessitant le modèle local.
+**258 contrôles automatiques hors ligne**, plus six sondes nécessitant le modèle local.
 
 ---
 
