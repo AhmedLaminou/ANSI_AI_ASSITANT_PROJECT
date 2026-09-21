@@ -16,6 +16,7 @@ export const ROUTES = [
   { tab: 'chat', path: '/assistant' },
   { tab: 'documents', path: '/documents' },
   { tab: 'users', path: '/utilisateurs' },
+  { tab: 'profile', path: '/profil' },
   { tab: 'admin', path: '/administration', section: 'supervision' },
   { tab: 'admin', path: '/administration/journal', section: 'journal' },
   { tab: 'admin', path: '/administration/retours', section: 'retours' },
@@ -31,6 +32,8 @@ const ALIASES = {
   '/admin/users': '/utilisateurs',
   '/chat': '/assistant',
   '/users': '/utilisateurs',
+  '/profile': '/profil',
+  '/compte': '/profil',
 }
 
 function normalise(pathname) {

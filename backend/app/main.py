@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import time
 import uuid
 from collections import defaultdict, deque
@@ -30,7 +31,7 @@ from .config import get_settings
 from .glossary import expand_for
 from .graph import build_assistant_graph
 from .prompts import assistant_description, system_message
-from .tools import find_tool
+from .tools import ROLE_RIGHTS, find_tool
 from .database import (
     AnswerFeedback,
     AuditEvent,
@@ -167,6 +168,13 @@ def record_failed_login(username: str, client_ip: str) -> None:
             _rate_buckets[key].popleft()
 
 
+EMAIL_PATTERN = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
+
+
+def email_field(**kwargs):
+    return Field(max_length=160, pattern=EMAIL_PATTERN, **kwargs)
+
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=8, max_length=128)
@@ -183,9 +191,28 @@ class RenameConversationRequest(BaseModel):
 
 class CreateUserRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    email: str | None = email_field(default=None)
     password: str = Field(min_length=12, max_length=128)
     role: str = Field(default="user")
     department: str | None = None
+
+
+class ChangePasswordRequest(BaseModel):
+    """Self-service change. The current password is required, so a session left open
+    on an unlocked machine cannot be used to lock the owner out."""
+
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=12, max_length=128)
+
+
+class UpdateDocumentRequest(BaseModel):
+    """Scope of an already-indexed document. Only fields present are changed."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    classification: str | None = None
+    allowed_roles: str | None = None
+    department: str | None = None
+    valid_until: str | None = None  # ISO date, or "" to clear
 
 
 class UpdateUserRequest(BaseModel):
@@ -199,7 +226,14 @@ class ResetPasswordRequest(BaseModel):
 
 
 class RegistrationRequest(BaseModel):
-    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    """Registration is by professional address.
+
+    An address identifies a real person at the agency, which a chosen nickname does
+    not: the administrator approving the request needs to know who is asking.
+    """
+
+    email: str = email_field()
+    full_name: str = Field(min_length=3, max_length=120)
     password: str = Field(min_length=12, max_length=128)
     requested_department: str
     reason: str = Field(default="", max_length=500)
@@ -297,6 +331,10 @@ app.add_middleware(
 # Field names as an agent would name them, not as the schema spells them.
 FIELD_LABELS: dict[str, str] = {
     "username": "L'identifiant",
+    "email": "L'adresse professionnelle",
+    "full_name": "Le nom et prénom",
+    "current_password": "Le mot de passe actuel",
+    "new_password": "Le nouveau mot de passe",
     "password": "Le mot de passe",
     "requested_department": "Le service demandé",
     "department": "Le service",
@@ -326,6 +364,8 @@ def explain_validation_error(error: dict[str, object]) -> str:
     if kind == "string_too_long":
         return f"{field} ne doit pas dépasser {context.get('max_length', '?')} caractères."
     if kind == "string_pattern_mismatch":
+        if location and location[-1] == "email":
+            return "L'adresse professionnelle n'est pas valide — exemple : prenom.nom@ansi.ne."
         if location and location[-1] == "username":
             # The commonest failure by far: a space or an accent in the username.
             return ("L'identifiant ne peut contenir que des lettres non accentuées, des chiffres, "
@@ -389,6 +429,7 @@ def account_summary(account: User) -> dict[str, object]:
     return {
         "id": account.id,
         "username": account.username,
+        "email": account.email,
         "role": account.role,
         "is_active": account.is_active,
         "department": account.department,
@@ -481,7 +522,13 @@ def login(
 ) -> None:
     client_ip = request.client.host if request.client else "unknown"
     enforce_login_rate_limit(payload.username, client_ip)
-    user = db.scalar(select(User).where(User.username == payload.username))
+    # Accounts predating the email column sign in by username; registrations since
+    # then sign in by address. Accepting either keeps both working without a
+    # migration that would invent an address for existing agents.
+    identifier = payload.username.strip()
+    user = db.scalar(
+        select(User).where((User.username == identifier) | (User.email == identifier.lower()))
+    )
     if user and user.status == "pending" and verify_password(payload.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -519,11 +566,135 @@ def current_user(user: User = Depends(get_current_user)) -> dict[str, object]:
     return {
         "id": user.id,
         "username": user.username,
+        "email": user.email,
         "role": user.role,
         "department": user.department,
         "department_label": department_label(user.department),
         "sees_every_department": user.role == "admin",
     }
+
+
+@app.get("/auth/profile")
+def my_profile(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict[str, object]:
+    """Everything an agent can legitimately know about their own account.
+
+    Deliberately self-only: there is no /auth/profile/{id}. An agent's perimeter is
+    their own, and letting one account read another's profile would be a small,
+    quiet way of learning the shape of the organisation.
+    """
+    readable = [
+        document
+        for document in db.scalars(select(DocumentRecord).where(DocumentRecord.is_current.is_(True))).all()
+        if can_access_document(user, document)
+    ]
+    by_department: dict[str, int] = {}
+    for document in readable:
+        by_department[document.department] = by_department.get(document.department, 0) + 1
+
+    conversations = db.scalars(select(Conversation).where(Conversation.user_id == user.id)).all()
+    conversation_ids = [conversation.id for conversation in conversations]
+    questions = db.scalar(
+        select(func.count()).select_from(ChatMessage)
+        .where(ChatMessage.conversation_id.in_(conversation_ids))
+        .where(ChatMessage.role == "user")
+    ) if conversation_ids else 0
+    verdicts = db.scalars(select(AnswerFeedback).where(AnswerFeedback.user_id == user.id)).all()
+    last_event = db.scalars(
+        select(AuditEvent).where(AuditEvent.actor_id == user.id).order_by(AuditEvent.id.desc()).limit(1)
+    ).first()
+
+    unreachable = sorted(DEPARTMENTS - {user.department or ""}) if user.role != "admin" else []
+    return {
+        "account": account_summary(user),
+        "rights": list(ROLE_RIGHTS.get(user.role, ROLE_RIGHTS["user"])),
+        "readable": {
+            "total": len(readable),
+            "by_department": {department_label(name): count for name, count in sorted(by_department.items())},
+            "unreachable": [department_label(name) for name in unreachable],
+        },
+        "activity": {
+            "conversations": len(conversations),
+            "questions": questions or 0,
+            "feedback_useful": len([v for v in verdicts if v.verdict == "useful"]),
+            "feedback_wrong": len([v for v in verdicts if v.verdict == "wrong"]),
+            "last_action": last_event.created_at.isoformat() if last_event else None,
+        },
+    }
+
+
+@app.post("/auth/password", status_code=status.HTTP_204_NO_CONTENT)
+def change_my_password(
+    payload: ChangePasswordRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    """An agent changes their own password, knowing the current one.
+
+    Until now only an administrator could reset a password, which meant every agent
+    who suspected their password was known had to ask someone else.
+
+    Caveat, and it is the one real hole left in the application: changing a password
+    does **not** revoke sessions already issued. A stolen session stays valid for up
+    to eight hours (§7.4).
+    """
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=403, detail="Mot de passe actuel incorrect.")
+    if payload.new_password == payload.current_password:
+        raise HTTPException(status_code=422, detail="Le nouveau mot de passe doit différer de l'ancien.")
+    account = db.get(User, user.id)
+    account.password_hash = password_hash.hash(payload.new_password)
+    db.add(AuditEvent(actor_id=user.id, document_id=None, event_type="user_password_changed"))
+    db.commit()
+
+
+@app.patch("/documents/{document_id}")
+def update_document(
+    document_id: int,
+    payload: UpdateDocumentRequest,
+    user: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Changes the scope of an already-indexed document, without re-importing it.
+
+    A document's perimeter is a decision that gets revised: a note filed as
+    « interne » turns out to concern one service only, or a service is reorganised.
+    Until now the only way to change it was to delete and re-import, which loses the
+    version history and costs a full re-indexing.
+
+    Administrator only, like deletion: these fields decide who may read the document,
+    so changing them is a permission operation, not an edit.
+    """
+    document = db.get(DocumentRecord, document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document introuvable")
+
+    if payload.classification is not None:
+        document.classification = payload.classification.strip() or document.classification
+    if payload.department is not None:
+        if payload.department not in DOCUMENT_DEPARTMENTS:
+            raise HTTPException(status_code=422, detail="Service invalide")
+        document.department = payload.department
+    if payload.allowed_roles is not None:
+        roles = parse_allowed_roles(payload.allowed_roles)
+        if not roles or not roles <= ROLES:
+            raise HTTPException(status_code=422, detail="Rôles autorisés invalides")
+        # An administrator removing their own role would make the document
+        # unreadable and unfixable through the interface.
+        if "admin" not in roles:
+            raise HTTPException(
+                status_code=422,
+                detail="Le rôle administrateur doit rester autorisé, sinon le document devient non modifiable.",
+            )
+        document.allowed_roles = ",".join(sorted(roles))
+    if payload.title is not None:
+        document.title = payload.title.strip() or document.title
+    if payload.valid_until is not None:
+        document.valid_until = parse_valid_until(payload.valid_until)
+
+    db.add(AuditEvent(actor_id=user.id, document_id=document.id, event_type="document_scope_updated"))
+    db.commit()
+    db.refresh(document)
+    return document_summary(document)
 
 
 @app.get("/documents")
@@ -1243,6 +1414,22 @@ def administration_overview(
     }
 
 
+def unique_username_for(db: Session, email: str) -> str:
+    """A readable identifier derived from the address, unique in the table.
+
+    The address is the credential; the username is what appears next to a question
+    and in the audit trail, where "ahmed.laminou" reads better than the full address.
+    """
+    base = re.sub(r"[^A-Za-z0-9_.-]", "-", email.split("@", 1)[0]).strip("-.") or "agent"
+    base = base[:56]
+    candidate = base
+    suffix = 2
+    while db.scalar(select(User).where(User.username == candidate)):
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    return candidate
+
+
 @app.post("/auth/register", status_code=status.HTTP_202_ACCEPTED)
 def register(
     payload: RegistrationRequest,
@@ -1274,19 +1461,27 @@ def register(
     if payload.requested_department not in DEPARTMENTS:
         raise HTTPException(status_code=422, detail="Service demandé invalide")
 
-    if db.scalar(select(User).where(User.username == payload.username)):
-        # Same body, same status code: an existing username is indistinguishable.
-        logger.info("Demande d'inscription sur un identifiant existant depuis %s", client_ip)
+    email = payload.email.strip().lower()
+    if db.scalar(select(User).where(User.email == email)):
+        # Same body, same status code: an existing address is indistinguishable.
+        logger.info("Demande d'inscription sur une adresse existante depuis %s", client_ip)
         return acknowledgement
 
+    username = unique_username_for(db, email)
+    reason = payload.reason.strip()
+    full_name = payload.full_name.strip()
     db.add(User(
-        username=payload.username,
+        username=username,
+        email=email,
         password_hash=password_hash.hash(payload.password),
         role="user",
         department=None,
         status="pending",
         requested_department=payload.requested_department,
-        request_reason=payload.reason.strip(),
+        # The name is what tells the administrator who is asking. Kept with the
+        # reason rather than in a column of its own: both are request material,
+        # discarded once the decision is made.
+        request_reason=f"{full_name} — {reason}" if reason else full_name,
         is_active=True,
     ))
     db.commit()

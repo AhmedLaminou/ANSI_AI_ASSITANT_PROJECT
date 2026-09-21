@@ -950,12 +950,13 @@ Correspondance avec les phases du document d'architecture (§34).
 | 5 | Procédure de mise à jour hors ligne | ❌ À faire |
 | 5 | Tests de charge et de sécurité | ❌ À faire |
 
-Couverture de tests, hors ligne : **258 contrôles** — `tests/test_units.py` (logique pure),
+Couverture de tests, hors ligne : **278 contrôles** — `tests/test_units.py` (logique pure),
 `tests/test_access.py` (40 contrôles de périmètre, toutes les paires de services dans les deux sens),
 `tests/test_prompts.py` (32 contrôles sur la composition des consignes), `tests/test_glossary.py`
 (24 contrôles sur les glossaires par service), `tests/test_dataset.py` (31 contrôles
 d'intégrité du jeu d'évaluation), `tests/test_regressions.py` (défauts trouvés en usage) et
-`tests/test_administration.py` (28 contrôles sur la supervision et les erreurs lisibles).
+`tests/test_administration.py` (31 contrôles sur la supervision et les erreurs lisibles) et
+`tests/test_profile_and_scope.py` (20 contrôles sur le profil et le périmètre d'un document).
 
 Sondes nécessitant Ollama : `tests/smoke_rag.py` (bout en bout), `tests/security_probe.py`
 (injection de prompt et fuite entre services), `tests/isolation_probe.py` (réseau sortant et
@@ -993,37 +994,11 @@ jetons/seconde, ni RAM/VRAM, ni nombre d'utilisateurs simultanés soutenables.
 2. **ACL au niveau du document uniquement** — pas de restriction par section ou par page.
 3. **Pas de pagination** — `GET /documents` renvoie tout. Sans effet à l'échelle actuelle, bloquant
    à quelques centaines de documents.
-4. **Pas d'invalidation de session** — réinitialiser un mot de passe ne révoque pas les jetons déjà
-   émis : une session compromise reste valide jusqu'à 8 h. Demande un identifiant de session en base
-   ou un numéro de version par compte inclus dans le jeton.
-5. **Mémoire conversationnelle à fenêtre fixe** — les 6 derniers messages, sans résumé des échanges
-   plus anciens.
-6. **Raisonnement du modèle émis malgré `think: false`** — `qwen3:4b` produit son raisonnement
-   interne dans le champ `content`, terminé par `</think>`, avant la réponse finale. Il est retiré
-   (`extract_answer()`) et masqué pendant le streaming, mais ces jetons sont **générés puis jetés** :
-   ils dominent le temps de réponse. C'est aujourd'hui le premier levier de latence — voir §5.8.
-7. **Coût de la reformulation** — quand la première recherche est faible, le graphe paie un appel
-   supplémentaire au modèle avant de répondre (§5.1). Compromis assumé : une réponse lente vaut mieux
-   qu'un refus injustifié, mais cela double la latence du pire cas.
-8. **Migration de schéma artisanale** — `ensure_schema()` ajoute les colonnes manquantes. Suffisant
-   pour le POC, à remplacer par Alembic avant la production.
-9. **Limitation de débit en mémoire du processus** — remise à zéro au redémarrage et non partagée
-   entre plusieurs instances. Correct pour un processus unique, à déporter (Redis ou équivalent)
-   le jour où l'API est répliquée. Vaut pour les questions comme pour les tentatives de connexion.
-10. **Vecteurs en JSON et recherche en Python sur SQLite** — subsiste sur le moteur de repli
-    uniquement ; disparaît dès que `DATABASE_URL` pointe vers PostgreSQL (§5.2).
-11. **Le matériel est aujourd'hui le facteur limitant.** Mesuré sur le poste de développement :
-    une question triviale (« réponds uniquement OK ») demande **21 s**, avec 0,5 Go de RAM libre sur
-    16 Go partagés avec l'IDE, le navigateur et les serveurs de développement. Le délai d'attente est
-    configurable (`CHAT_TIMEOUT_SECONDS`) précisément parce qu'un poste chargé dépasse facilement
-    trois minutes. Ce n'est pas un défaut du code : c'est la démonstration qu'un serveur dédié, avec
-    GPU, est nécessaire avant tout usage réel.
-12. **Le journal d'audit porte les attributs actuels de l'auteur**, pas ceux qu'il avait au moment
-    de l'événement. Un agent transféré des RH aux finances apparaît rétroactivement aux finances
-    sur toutes ses actions passées. Figer l'état demanderait de le copier à l'écriture.
-13. **Le routage de l'interface n'est pas protégé côté serveur** — il ne l'a pas à être : chaque
-    point d'entrée d'administration vérifie le rôle indépendamment de l'écran affiché. Une URL
-    devinée ne donne donc rien de plus qu'un écran vide.
+4. **Pas d'invalidation de session** — ni une réinitialisation par l'administrateur, ni le
+   changement par l'agent lui-même (`POST /auth/password`) ne révoquent les jetons déjà émis :
+   une session compromise reste valide jusqu'à 8 h. C'est devenu plus visible depuis que l'agent
+   peut changer son mot de passe seul — il le fait précisément quand il le croit connu. Demande
+   un identifiant de session en base, ou un numéro de version par compte inclus dans le jeton.
 
 ---
 
@@ -1033,7 +1008,8 @@ jetons/seconde, ni RAM/VRAM, ni nombre d'utilisateurs simultanés soutenables.
 limitation de débit, protection du formulaire de connexion, mécanisme de purge, OCR local,
 PostgreSQL + pgvector, graphe de décision avec reformulation, outils métier, cloisonnement par
 service, demande d'accès et approbation, consignes et glossaires par service, sondes d'injection de
-prompt — et 208 contrôles automatiques hors ligne.
+prompt, supervision et journal consultable, profil et périmètre modifiable — et 278
+contrôles automatiques hors ligne.
 
 **Reste, dans cet ordre :**
 
@@ -1046,23 +1022,24 @@ prompt — et 208 contrôles automatiques hors ligne.
 
 *Vérifications jamais faites, et qui touchent à la promesse centrale du projet*
 
-3. ~~Fuite de données dans les journaux et réseau sortant~~ — **fait le 20/09**, `tests/isolation_probe.py`, 8 contrôles. « Rien ne sort de la machine » est désormais vérifié
-   sur le trafic réellement émis, pas sur la configuration.
+3. **Qualité §35** : questions ambiguës, documents longs, documents contradictoires — aucun jeu de
+   données associé. (La fuite par les journaux et le réseau sortant ont été vérifiées le 20/09,
+   `tests/isolation_probe.py`.)
 
 *Code*
 
-5. **Invalidation des sessions** après changement de mot de passe (§7.4). Trou réel : une session
+4. **Invalidation des sessions** après changement de mot de passe (§7.4). Trou réel : une session
    compromise reste valide jusqu'à 8 h.
-6. **Durcir le jeu d'évaluation** (§5.8) — 34/34 signifie qu'il ne discrimine plus, donc qu'il ne
+5. **Durcir le jeu d'évaluation** (§5.8) — 34/34 signifie qu'il ne discrimine plus, donc qu'il ne
    détecterait plus une régression.
-7. **Benchmark de modèles**, en particulier un modèle **sans raisonnement** : les jetons de
+6. **Benchmark de modèles**, en particulier un modèle **sans raisonnement** : les jetons de
    raisonnement dominent la latence (§7.6). Premier levier de qualité perçue.
-8. **Script de reprise SQLite → PostgreSQL** avant de basculer une base contenant de vrais documents.
-9. **Alembic** en remplacement de `ensure_schema()` (§7.8).
+7. **Script de reprise SQLite → PostgreSQL** avant de basculer une base contenant de vrais documents.
+8. **Alembic** en remplacement de `ensure_schema()` (§7.8).
 
 *Mise en production*
 
-10. **SSO / LDAP**, puis **conteneurisation, supervision, sauvegardes**, procédure de mise à jour
+9. **SSO / LDAP**, puis **conteneurisation, supervision, sauvegardes**, procédure de mise à jour
     hors ligne, tests de charge.
-11. **Limitation de débit partagée** (§7.9) et **pagination** de `GET /documents` (§7.3), le jour où
+10. **Limitation de débit partagée** (§7.9) et **pagination** de `GET /documents` (§7.3), le jour où
     l'API est répliquée ou le corpus dépasse quelques centaines de documents.

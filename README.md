@@ -27,6 +27,9 @@ gouvernance et de la montée en charge** — voir
 | Glossaires par service (« CP » ≠ « CP ») | ✅ 24 contrôles, effet mesuré |
 | Outils répondant depuis la base, pas les documents | ✅ Cinq outils, droits appliqués |
 | Supervision, journal d'audit et retours côté administrateur | ✅ Écran dédié, 28 contrôles |
+| Profil de chaque agent, changement de mot de passe par lui-même | ✅ Écran dédié |
+| Périmètre d'un document modifiable sans réimport | ✅ Administrateur, journalisé |
+| Création de compte par adresse professionnelle, validée par l'administrateur | ✅ |
 | Injection de prompt et fuite entre services | ✅ 17 contrôles |
 | Fuite par les journaux, réseau sortant | ✅ 8 contrôles, sur le trafic réellement émis |
 | Jeu d'évaluation **par service** | ✅ 34 questions, relevé par périmètre |
@@ -36,7 +39,7 @@ gouvernance et de la montée en charge** — voir
 | Conteneurisation, reverse proxy, supervision, sauvegardes | ❌ Procédure écrite, jamais exécutée |
 | Tests de charge, mesures RAM/VRAM | ❌ Jamais faits |
 
-**220+ contrôles automatiques hors ligne**, plus six sondes nécessitant le modèle local.
+**278 contrôles automatiques hors ligne**, plus six sondes nécessitant le modèle local.
 
 Le détail est dans [docs/ARCHITECTURE_TECHNIQUE.md](docs/ARCHITECTURE_TECHNIQUE.md) §8. Tant que les
 deux arbitrages ci-dessus ne sont pas rendus, n'utiliser que des documents non sensibles.

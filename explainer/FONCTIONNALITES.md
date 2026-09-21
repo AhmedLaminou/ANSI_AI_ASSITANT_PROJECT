@@ -135,9 +135,9 @@ donc pas divulguer ce qu'il n'a jamais reçu.
 
 ### Comment un agent RH obtient son accès
 
-1. Il dépose une **demande** sur l'écran de connexion : identifiant, mot de passe, service souhaité,
+1. Il **crée son compte** sur l'écran de connexion : nom et prénom, **adresse professionnelle**, mot de passe, service souhaité, motif. Le compte est créé immédiatement mais **en attente** : sans rôle, sans service, incapable de se connecter.
    motif. Son compte est créé **en attente** : sans rôle, sans service, incapable de se connecter.
-2. L'**administrateur central** voit la demande dans sa file. Le service demandé n'est qu'une
+2. L'**administrateur central** voit la demande dans sa file, avec le nom de la personne — il doit savoir qui demande. Le service souhaité n'est qu'une indication : il choisit le rôle et le service **réellement accordés**, qui peuvent différer.
    indication : il choisit le rôle et le service **réellement accordés**, qui peuvent différer.
 3. À l'approbation, le compte devient actif avec le périmètre accordé. L'agent se connecte et arrive
    directement sur l'assistant de son service.
@@ -145,6 +145,20 @@ donc pas divulguer ce qu'il n'a jamais reçu.
 
 Un administrateur peut aussi créer un compte directement, en choisissant rôle **et** service, et
 rattacher après coup un compte qui n'en aurait pas.
+
+
+**Pourquoi une adresse et non un identifiant choisi.** Une adresse professionnelle désigne une
+personne réelle de l'agence ; un pseudonyme non. L'administrateur qui approuve a besoin de savoir
+qui demande. L'identifiant affiché à côté d'une question et dans le journal d'audit est dérivé de
+l'adresse — « amina.souley » se lit mieux que l'adresse entière.
+
+La validation est **syntaxique uniquement**, par motif, sans la bibliothèque `email-validator` :
+c'est une roue de plus à embarquer dans un déploiement coupé du réseau, et une bibliothèque capable
+d'interroger le DNS — précisément ce que cette application ne doit jamais faire. Rien n'envoie de
+courrier de toute façon.
+
+Les comptes antérieurs à l'adresse se connectent toujours par leur identifiant : la connexion
+accepte l'un ou l'autre, sans migration qui inventerait une adresse pour des agents existants.
 
 **Point important :** l'autorisation est relue **en base à chaque requête**, jamais dans le jeton de
 session. Changer le service d'un agent prend effet immédiatement, sans qu'il ait à se reconnecter.
@@ -368,6 +382,39 @@ ni en réponse directe ni en streaming.
 
 ---
 
+### Le profil de chaque agent
+
+Tout compte connecté — administrateur ou non — dispose de son écran `/profil` : identité, adresse,
+rôle, service, ce que le rôle permet, les documents interrogeables par service, **ce qui est hors de
+portée**, et l'activité du compte (conversations, questions, avis donnés, dernière action).
+
+Il porte aussi le **changement de mot de passe par l'agent lui-même**, en connaissant l'actuel.
+Jusque-là seul un administrateur pouvait réinitialiser : tout agent qui soupçonnait son mot de passe
+connu devait passer par quelqu'un d'autre.
+
+Le mot de passe actuel est exigé, pour qu'une session restée ouverte sur un poste non verrouillé ne
+permette pas à un passant d'enfermer le titulaire hors de son propre compte.
+
+> **Il n'existe pas d'écran du profil d'un autre agent**, et c'est délibéré : le périmètre d'un
+> compte est le sien, et consulter la fiche d'un autre serait une façon discrète d'apprendre la
+> forme de l'agence.
+
+### Le périmètre d'un document se révise
+
+Un document classé « interne » se révèle ne concerner qu'un service, ou un service est réorganisé.
+Un administrateur modifie désormais titre, service, classification et rôles autorisés d'un document
+**déjà indexé**, sans réimport : le changement prend effet immédiatement, le contenu n'est pas
+touché, l'historique des versions est conservé.
+
+Avant, la seule façon d'y parvenir était de supprimer et réimporter — ce qui perdait l'historique et
+coûtait une réindexation complète.
+
+Réservé à l'administrateur, comme la suppression : ces champs décident **qui peut lire**, donc les
+changer est une opération de permission, pas une retouche. Le rôle `admin` ne peut pas être retiré —
+le document deviendrait illisible et non modifiable par l'interface, et seule la base permettrait
+d'y revenir.
+
+
 ### L'écran d'administration
 
 Un écran dédié, en trois volets, construit autour d'une idée : **un administrateur a besoin de voir
@@ -502,14 +549,15 @@ médiane : la charge de la machine domine la mesure.
 | Fuite dans les journaux | ✅ contenu, mots de passe, jeton |
 | Authentification | ✅ |
 | Demande d'accès et approbation | ✅ 16 contrôles |
-| Supervision, journal d'audit, retours | ✅ 28 contrôles |
+| Supervision, journal d'audit, retours | ✅ 31 contrôles |
 | Erreurs de validation lisibles par l'agent | ✅ 22 contrôles de régression |
+| Profil, changement de mot de passe, périmètre d'un document | ✅ 20 contrôles |
 | Données nominatives dans une réponse | ⚠️ **mesuré, non garanti** — tendance, pas contrôle d'accès |
 | Escalade de privilèges | ⚠️ partiel |
 | Questions ambiguës, documents longs, documents contradictoires | ❌ aucun jeu de données |
 | Invalidation de session après changement de mot de passe | ❌ **trou réel** : une session compromise reste valide jusqu'à 8 h |
 
-**258 contrôles automatiques hors ligne**, plus six sondes nécessitant le modèle local.
+**278 contrôles automatiques hors ligne**, plus six sondes nécessitant le modèle local.
 
 ---
 

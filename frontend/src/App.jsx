@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 import Administration from './Administration.jsx'
+import Profile from './Profile.jsx'
 import { useRoute } from './routing.js'
 import {
   CLASSIFICATIONS,
@@ -235,6 +236,8 @@ function Login({ onLogin, theme, onToggleTheme }) {
   const [mode, setMode] = useState('login')
   const [requestedDepartment, setRequestedDepartment] = useState('technique')
   const [reason, setReason] = useState('')
+  const [email, setEmail] = useState('')
+  const [fullName, setFullName] = useState('')
 
   async function submit(event) {
     event.preventDefault()
@@ -247,7 +250,8 @@ function Login({ onLogin, theme, onToggleTheme }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            username,
+            email,
+            full_name: fullName,
             password,
             requested_department: requestedDepartment,
             reason,
@@ -257,6 +261,7 @@ function Login({ onLogin, theme, onToggleTheme }) {
         setMode('login')
         setPassword('')
         setReason('')
+        setFullName('')
         return
       }
       await request('/auth/login', {
@@ -292,35 +297,60 @@ function Login({ onLogin, theme, onToggleTheme }) {
       </section>
       <section className="login-panel">
         <form className="login-card" onSubmit={submit}>
-          <p className="overline">{mode === 'register' ? "DEMANDE D'ACCÈS" : 'ACCÈS SÉCURISÉ'}</p>
-          <h2>{mode === 'register' ? 'Demander un accès' : 'Bienvenue'}</h2>
+          <p className="overline">{mode === 'register' ? 'CRÉER UN COMPTE' : 'ACCÈS SÉCURISÉ'}</p>
+          <h2>{mode === 'register' ? 'Créer mon compte' : 'Bienvenue'}</h2>
           <p className="subtle">
             {mode === 'register'
-              ? "Votre demande sera transmise à l'administrateur, qui définira votre rôle et votre service."
+              ? "Votre compte est créé immédiatement, puis transmis à l'administrateur pour validation. Il définit le rôle et le service accordés — vous pourrez vous connecter dès son accord."
               : 'Connectez-vous pour accéder à votre espace documentaire.'}
           </p>
           {notice && <p className="form-notice">{notice}</p>}
-          <label>
-            Identifiant
-            <input
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              autoComplete="username"
-              minLength="3"
-              maxLength="64"
-              pattern={mode === 'register' ? '[A-Za-z0-9_.\-]+' : undefined}
-              title={mode === 'register'
-                ? 'Lettres non accentuées, chiffres, et les signes . - _ — ni espace, ni accent.'
-                : undefined}
-              required
-            />
-            {mode === 'register' && (
-              <span className="field-hint">
-                Lettres non accentuées, chiffres et les signes <code>.</code> <code>-</code>{' '}
-                <code>_</code>. Ni espace, ni accent.
-              </span>
-            )}
-          </label>
+          {mode === 'register' ? (
+            <>
+              <label>
+                Nom et prénom
+                <input
+                  value={fullName}
+                  onChange={(event) => setFullName(event.target.value)}
+                  autoComplete="name"
+                  minLength="3"
+                  maxLength="120"
+                  placeholder="Amina Souley"
+                  required
+                />
+                <span className="field-hint">
+                  C'est ce que verra l'administrateur qui traitera votre demande.
+                </span>
+              </label>
+              <label>
+                Adresse professionnelle
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  autoComplete="email"
+                  maxLength="160"
+                  placeholder="prenom.nom@ansi.ne"
+                  required
+                />
+                <span className="field-hint">
+                  Elle servira d'identifiant de connexion.
+                </span>
+              </label>
+            </>
+          ) : (
+            <label>
+              Adresse ou identifiant
+              <input
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                autoComplete="username"
+                minLength="3"
+                maxLength="160"
+                required
+              />
+            </label>
+          )}
           <label>
             Mot de passe
             <input
@@ -377,7 +407,7 @@ function Login({ onLogin, theme, onToggleTheme }) {
               setNotice('')
             }}
           >
-            {mode === 'register' ? "J'ai déjà un compte — me connecter" : "Pas encore de compte ? Demander un accès"}
+            {mode === 'register' ? "J'ai déjà un compte — me connecter" : 'Pas encore de compte ? En créer un'}
           </button>
           <p className="form-note">
             Ni vos questions ni vos documents ne quittent les serveurs de l'ANSI : aucun service
@@ -847,6 +877,108 @@ function DocumentPreview({ preview, onClose }) {
   )
 }
 
+/** Le périmètre d'un document se révise : une note classée « interne » ne concerne
+ * finalement qu'un service, ou un service est réorganisé. Avant, la seule façon de
+ * le changer était de supprimer et réimporter — ce qui perd l'historique des
+ * versions et coûte une réindexation complète. */
+function ScopeEditor({ document, onClose, onSaved, onToast }) {
+  const [classification, setClassification] = useState(document.classification)
+  const [department, setDepartment] = useState(document.department)
+  const [roles, setRoles] = useState(document.allowed_roles)
+  const [title, setTitle] = useState(document.title)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  function toggleRole(role) {
+    setRoles((current) =>
+      current.includes(role) ? current.filter((item) => item !== role) : [...current, role],
+    )
+  }
+
+  async function submit(event) {
+    event.preventDefault()
+    setError('')
+    setBusy(true)
+    try {
+      await request(`/documents/${document.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          classification,
+          department,
+          allowed_roles: roles.join(','),
+        }),
+      })
+      onToast(`Périmètre de « ${title} » mis à jour.`, 'success')
+      onSaved()
+      onClose()
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <form className="modal scope-modal" onClick={(event) => event.stopPropagation()} onSubmit={submit}>
+        <div className="modal-head">
+          <h3>Modifier le périmètre</h3>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Fermer">
+            <Icon name="close" />
+          </button>
+        </div>
+        <p className="muted">
+          Ces champs décident qui peut lire le document. Le changement prend effet immédiatement,
+          sans réindexation : le contenu n'est pas touché.
+        </p>
+        <label>
+          Titre
+          <input value={title} onChange={(event) => setTitle(event.target.value)} required />
+        </label>
+        <label>
+          Service
+          <select value={department} onChange={(event) => setDepartment(event.target.value)}>
+            {DOCUMENT_DEPARTMENTS.map((item) => (
+              <option key={item.value} value={item.value}>{item.label}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Classification
+          <select value={classification} onChange={(event) => setClassification(event.target.value)}>
+            {CLASSIFICATIONS.map((value) => <option key={value}>{value}</option>)}
+          </select>
+          <span className="field-hint">
+            Indicative seulement : ce sont les rôles ci-dessous qui filtrent réellement.
+          </span>
+        </label>
+        <fieldset className="role-grid">
+          <legend>Rôles autorisés</legend>
+          {ROLES.map((role) => (
+            <label key={role} className="checkbox">
+              <input
+                type="checkbox"
+                checked={roles.includes(role)}
+                disabled={role === 'admin'}
+                onChange={() => toggleRole(role)}
+              />
+              {role}
+              {role === 'admin' && <span className="field-hint">toujours autorisé</span>}
+            </label>
+          ))}
+        </fieldset>
+        {error && <p className="error">{error}</p>}
+        <div className="modal-actions">
+          <button type="button" className="text-button" onClick={onClose}>Annuler</button>
+          <button className="primary" disabled={busy}>{busy ? 'Enregistrement…' : 'Enregistrer'}</button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
 function DocumentsView({ user, documents, onRefresh, onToast }) {
   const [file, setFile] = useState(null)
   const [title, setTitle] = useState('')
@@ -859,6 +991,7 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
   const [preview, setPreview] = useState(null)
+  const [editing, setEditing] = useState(null)
   const [showSuperseded, setShowSuperseded] = useState(false)
   const [departmentFilter, setDepartmentFilter] = useState('all')
   const [withHistory, setWithHistory] = useState(null)
@@ -1076,15 +1209,28 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
                 <Icon name="eye" /> Aperçu
               </button>
               {user.role === 'admin' && (
-                <button className="icon-button" title="Supprimer" onClick={() => removeDocument(document.id, document.title)}>
-                  <Icon name="trash" />
-                </button>
+                <>
+                  <button className="text-button" onClick={() => setEditing(document)}>
+                    <Icon name="pencil" /> Périmètre
+                  </button>
+                  <button className="icon-button" title="Supprimer" onClick={() => removeDocument(document.id, document.title)}>
+                    <Icon name="trash" />
+                  </button>
+                </>
               )}
             </article>
           ))
         )}
       </div>
       <DocumentPreview preview={preview} onClose={() => setPreview(null)} />
+      {editing && (
+        <ScopeEditor
+          document={editing}
+          onClose={() => setEditing(null)}
+          onSaved={onRefresh}
+          onToast={onToast}
+        />
+      )}
     </section>
   )
 }
@@ -1520,7 +1666,11 @@ function App() {
             <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
             {theme === 'dark' ? 'Thème clair' : 'Thème sombre'}
           </button>
-          <div className="account">
+          <button
+            className={`account${tab === 'profile' ? ' active' : ''}`}
+            onClick={() => navigate('profile')}
+            title="Mon profil"
+          >
             <div className="avatar">{user.username.slice(0, 1).toUpperCase()}</div>
             <div>
               <strong>{user.username}</strong>
@@ -1528,7 +1678,8 @@ function App() {
                 {user.role} · {user.sees_every_department ? 'tous services' : user.department_label}
               </span>
             </div>
-          </div>
+            <Icon name="pencil" className="account-go" />
+          </button>
           <button className="logout" onClick={() => setShowShortcuts(true)}>
             <Icon name="spark" /> Raccourcis clavier <span className="nav-key">?</span>
           </button>
@@ -1560,6 +1711,7 @@ function App() {
           <DocumentsView user={user} documents={documents} onRefresh={refreshDocuments} onToast={pushToast} />
         )}
         {tab === 'users' && <UsersView user={user} onToast={pushToast} />}
+        {tab === 'profile' && <Profile user={user} onToast={pushToast} />}
         {tab === 'admin' && (
           <Administration
             user={user}

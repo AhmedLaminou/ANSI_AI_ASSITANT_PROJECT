@@ -131,9 +131,12 @@ def my_access(db: Session, user: User) -> str:
     Dire explicitement ce que le compte **ne voit pas** est la moitié utile de la
     réponse : un agent qui ignore qu'un périmètre existe croit que le corpus est vide.
     """
+    identity = f"Vous êtes **{user.username}**"
+    if user.email:
+        identity += f" ({user.email})"
     lines = [
-        f"Votre compte « {user.username} » a le rôle **{user.role}** "
-        f"et appartient au service **{department_label(user.department)}**.",
+        f"{identity}, avec le rôle **{user.role}**, "
+        f"rattaché au service **{department_label(user.department)}**.",
         "",
         "Ce que votre rôle vous permet :",
     ]
@@ -224,6 +227,14 @@ TOOLS: tuple[Tool, ...] = (
         name="my_access",
         description="Rôle, service et périmètre de lecture du compte",
         patterns=(
+            "qui suis je",
+            "qui je suis",
+            "whoami",
+            "mon profil",
+            "mes informations",
+            "mon compte",
+            "quel est mon nom",
+            "comment je m appelle",
             "quels droits",
             "quel droit",
             "mes droits",

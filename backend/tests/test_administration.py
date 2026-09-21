@@ -76,13 +76,16 @@ def people():
 # error was a list of Pydantic objects, which the interface rendered as nothing
 # useful, so the same invalid form was resubmitted over and over.
 
+BASE = {"email": "amina.souley@ansi.ne", "full_name": "Amina Souley",
+        "password": "MotDePasseValide2026", "requested_department": "rh"}
+
+
 @pytest.mark.parametrize("payload,expected", [
-    ({"username": "essai-court", "password": "court", "requested_department": "rh"},
-     "12 caractères"),
-    ({"username": "Ahmed Laminou", "password": "MotDePasseValide2026", "requested_department": "rh"},
-     "ni espace, ni accent"),
-    ({"username": "essai-sans", "password": "MotDePasseValide2026"},
-     "obligatoire"),
+    ({**BASE, "password": "court"}, "12 caractères"),
+    ({**BASE, "email": "pas-un-email"}, "adresse professionnelle"),
+    ({**BASE, "email": "amina souley@ansi.ne"}, "adresse professionnelle"),
+    ({k: v for k, v in BASE.items() if k != "requested_department"}, "obligatoire"),
+    ({**BASE, "full_name": "A"}, "3 caractères"),
 ])
 def test_a_validation_error_is_a_readable_sentence(payload, expected):
     with TestClient(app) as client:
@@ -95,23 +98,53 @@ def test_a_validation_error_is_a_readable_sentence(payload, expected):
 
 def test_several_invalid_fields_are_all_reported():
     with TestClient(app) as client:
-        response = client.post("/auth/register", json={"username": "a b", "password": "x"})
-    detail = response.json()["detail"]
-    assert "identifiant" in detail.lower() and "mot de passe" in detail.lower()
+        response = client.post("/auth/register", json={"email": "a b", "password": "x"})
+    detail = response.json()["detail"].lower()
+    assert "adresse" in detail and "mot de passe" in detail
 
 
-def test_a_valid_request_is_still_accepted():
+def test_a_valid_request_is_accepted_and_derives_a_readable_username():
+    """The address is the credential; the username is what appears in the audit trail,
+    where « amina.souley » reads better than the whole address."""
     run = uuid.uuid4().hex[:8]
-    name = f"valide-{run}"
+    email = f"amina.souley.{run}@ansi.ne"
     try:
         with TestClient(app) as client:
             response = client.post("/auth/register", json={
-                "username": name, "password": "MotDePasseValide2026", "requested_department": "rh",
+                "email": email, "full_name": "Amina Souley",
+                "password": "MotDePasseValide2026", "requested_department": "rh",
             })
         assert response.status_code == 202
+        with SessionLocal() as db:
+            account = db.scalar(select(User).where(User.email == email))
+        assert account is not None
+        assert account.status == "pending" and account.department is None
+        assert account.username.startswith("amina.souley")
+        # The name reaches the administrator, who needs to know who is asking.
+        assert "Amina Souley" in account.request_reason
     finally:
         with SessionLocal() as db:
-            db.execute(delete(User).where(User.username == name))
+            db.execute(delete(User).where(User.email == email))
+            db.commit()
+
+
+def test_a_second_request_on_the_same_address_is_indistinguishable():
+    """Otherwise registration becomes an oracle for who works at the agency."""
+    run = uuid.uuid4().hex[:8]
+    email = f"doublon.{run}@ansi.ne"
+    payload = {"email": email, "full_name": "Amina Souley",
+               "password": "MotDePasseValide2026", "requested_department": "rh"}
+    try:
+        with TestClient(app) as client:
+            first = client.post("/auth/register", json=payload)
+            second = client.post("/auth/register", json=payload)
+        assert first.status_code == second.status_code == 202
+        assert first.json() == second.json()
+        with SessionLocal() as db:
+            assert len(db.scalars(select(User).where(User.email == email)).all()) == 1
+    finally:
+        with SessionLocal() as db:
+            db.execute(delete(User).where(User.email == email))
             db.commit()
 
 

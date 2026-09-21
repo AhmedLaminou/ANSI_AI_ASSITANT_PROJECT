@@ -70,6 +70,9 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # Professional address. Nullable because accounts created before it existed have
+    # none; new registrations always carry one, and sign-in accepts either.
+    email: Mapped[str | None] = mapped_column(String(160), unique=True, nullable=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(32), default="user")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -188,6 +191,7 @@ def ensure_schema() -> None:
             "department": "VARCHAR(32) NOT NULL DEFAULT 'transverse'",
         },
         "users": {
+            "email": "VARCHAR(160) NULL",
             "department": "VARCHAR(32) NULL",
             "status": "VARCHAR(16) NOT NULL DEFAULT 'active'",
             "requested_department": "VARCHAR(32) NULL",
