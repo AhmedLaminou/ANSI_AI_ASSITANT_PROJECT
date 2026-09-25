@@ -1,3 +1,9 @@
+# Dépendances de l'API. Les bornes sont volontairement étroites : un déploiement
+# hors ligne construit son colis de roues sur une machine et l'installe sur une
+# autre, souvent des semaines plus tard. Des bornes larges produisent deux colis
+# différents et un incident à la livraison — c'est arrivé le 25/09/2026.
+#
+# Pour reproduire exactement l'environnement testé : requirements.lock.txt
 fastapi>=0.115,<1.0
 uvicorn[standard]>=0.32,<1.0
 httpx>=0.28,<1.0
@@ -17,6 +23,12 @@ SQLAlchemy>=2.0,<3.0
 pgvector>=0.3,<0.5
 psycopg[binary]>=3.2,<4.0
 # Orchestration du parcours de décision (recherche, reformulation, refus).
-langgraph>=0.2,<0.8
+# langchain-core est plafonné volontairement : à partir de 0.3.61 il exige
+# uuid-utils, dont le binaire compilé n'est pas signé. Smart App Control le bloque
+# sous Windows — l'application ne démarrait plus — et un binaire non signé de plus
+# est exactement ce qu'on ne veut pas embarquer dans un déploiement hors ligne.
+# Voir requirements.lock.txt pour l'ensemble exact utilisé pour construire le colis.
+langgraph>=0.6,<0.7
+langchain-core>=0.3.50,<0.3.61
 PyJWT>=2.10,<3.0
 pwdlib[argon2]>=0.2,<1.0

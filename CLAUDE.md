@@ -31,7 +31,7 @@ From `backend/`:
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload   # API (voir note ci-dessous)
-.\.venv\Scripts\python.exe -m pytest tests/ -q               # whole offline suite: 278 checks
+.\.venv\Scripts\python.exe -m pytest tests/ -q               # whole offline suite: 281 checks
 .\.venv\Scripts\python.exe -m pytest tests/test_units.py -q  # fast subset, no Ollama needed
 .\.venv\Scripts\python.exe -m tests.smoke_rag                # end to end, slow, needs Ollama
 .\.venv\Scripts\python.exe -m tests.evaluate                 # quality per department: accuracy, sources, refusals, latency
@@ -45,6 +45,13 @@ From `backend/`:
 ```
 
 From `frontend/`: `npm run dev` for development — **never on a server**.
+
+**Dependencies are pinned, and `requirements.lock.txt` is the source of truth.**
+Smart App Control blocks unsigned binaries, and that is not limited to `.exe` shims: on
+2026-09-25 a resolution pulled `langchain-core` 1.6.3 → `uuid-utils`, whose compiled
+`.pyd` is unsigned, and `app.main` stopped importing entirely. If the application
+suddenly will not start after any `pip install`, look there first. `tests/test_regressions.py`
+now fails early with a readable message instead of an opaque ImportError at collection.
 
 **Always invoke tools as `python -m <tool>`, never the `.exe` shim in `Scripts/`.**
 Smart App Control is enforced on this machine and blocks pip-generated launchers

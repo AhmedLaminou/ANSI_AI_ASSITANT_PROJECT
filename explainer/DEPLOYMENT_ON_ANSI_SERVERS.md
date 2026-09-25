@@ -80,8 +80,10 @@ mkdir -p colis-ansi && cd colis-ansi
 git clone https://github.com/AhmedLaminou/ANSI_AI_ASSITANT_PROJECT.git app
 rm -rf app/.git
 
-# 2. Les dépendances Python, en roues précompilées
-python3.11 -m pip download -r app/backend/requirements.txt -d wheels
+# 2. Les dépendances Python, en roues précompilées.
+#    requirements.lock.txt, pas requirements.txt : il fige les versions exactes
+#    testées. Voir l'encadré ci-dessous — ce n'est pas un détail.
+python3.11 -m pip download -r app/backend/requirements.lock.txt -d wheels
 
 # 3. Le frontend compilé (le serveur n'a pas besoin de Node)
 cd app/frontend && npm ci && npm run build && cd ../..
@@ -102,6 +104,19 @@ cd ..
 # 6. Le binaire Ollama
 curl -L https://ollama.com/download/ollama-linux-amd64.tgz -o ollama.tgz
 ```
+
+> **Pourquoi le fichier verrouillé, et pas `requirements.txt`.** Un colis se construit un jour sur
+> une machine connectée et s'installe des semaines plus tard sur une autre. Avec des bornes larges,
+> les deux résolutions ne donnent pas les mêmes paquets, et l'écart ne se découvre qu'à la livraison.
+>
+> C'est arrivé le 25/09/2026, en développement : une résolution a ramené `langchain-core` 1.6.3, qui
+> exige `uuid-utils`, dont le binaire compilé **n'est pas signé**. Smart App Control l'a bloqué et
+> l'application ne démarrait plus du tout. Le correctif a été un plafond dans `requirements.txt` et
+> un `requirements.lock.txt` figé ; `uuid-utils` a disparu de l'arbre, ce qui fait un binaire non
+> signé de moins à embarquer.
+>
+> Sur un serveur ANSI, le même incident se serait produit **après** le transport, sans réseau pour
+> le corriger.
 
 **Vérifiez l'intégrité avant de transporter** — c'est ce qui rend le colis auditable :
 
@@ -148,7 +163,7 @@ sudo chown -R ansi:ansi /opt/ansi-assistant
 sudo -u ansi python3.11 -m venv /opt/ansi-assistant/current/backend/.venv
 sudo -u ansi /opt/ansi-assistant/current/backend/.venv/bin/python -m pip install \
      --no-index --find-links=/chemin/vers/colis-ansi/wheels \
-     -r /opt/ansi-assistant/current/backend/requirements.txt
+     -r /opt/ansi-assistant/current/backend/requirements.lock.txt
 ```
 
 `--no-index` est important : il **garantit** qu'aucune dépendance n'est cherchée en ligne. Si une
@@ -452,11 +467,11 @@ sudo -u ansi cp /opt/ansi-assistant/current/.env /opt/ansi-assistant/2026-10-15/
 
 # 3. Dépendances, toujours hors ligne
 sudo -u ansi /opt/ansi-assistant/2026-10-15/backend/.venv/bin/python -m pip install \
-     --no-index --find-links=/chemin/wheels -r .../requirements.txt
+     --no-index --find-links=/chemin/wheels -r .../requirements.lock.txt
 
 # 4. Vérifier avant de basculer
 cd /opt/ansi-assistant/2026-10-15/backend
-sudo -u ansi .venv/bin/python -m pytest tests/ -q          # 278 contrôles, sans modèle
+sudo -u ansi .venv/bin/python -m pytest tests/ -q          # 281 contrôles, sans modèle
 sudo -u ansi .venv/bin/python -m tests.isolation_probe     # rien ne sort
 sudo -u ansi .venv/bin/python -m tests.security_probe      # injection de prompt
 

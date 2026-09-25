@@ -39,7 +39,7 @@ gouvernance et de la montée en charge** — voir
 | Conteneurisation, reverse proxy, supervision, sauvegardes | ❌ Procédure écrite, jamais exécutée |
 | Tests de charge, mesures RAM/VRAM | ❌ Jamais faits |
 
-**278 contrôles automatiques hors ligne**, plus six sondes nécessitant le modèle local.
+**281 contrôles automatiques hors ligne**, plus six sondes nécessitant le modèle local.
 
 Le détail est dans [docs/ARCHITECTURE_TECHNIQUE.md](docs/ARCHITECTURE_TECHNIQUE.md) §8. Tant que les
 deux arbitrages ci-dessus ne sont pas rendus, n'utiliser que des documents non sensibles.
@@ -170,7 +170,7 @@ Puis, depuis `backend`, avec Ollama démarré :
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_units.py -q   # logique pure, rapide, sans Ollama
-.\.venv\Scripts\python.exe -m pytest tests/ -q                   # toute la suite hors ligne : 278 contrôles
+.\.venv\Scripts\python.exe -m pytest tests/ -q                   # toute la suite hors ligne : 281 contrôles
 .\.venv\Scripts\python.exe -m tests.smoke_rag                 # bout en bout, crée et supprime ses données
 .\.venv\Scripts\python.exe -m tests.evaluate                  # qualité par service (exactitude, sources, refus, latence)
 .\.venv\Scripts\python.exe -m tests.evaluate --model qwen3:0.6b   # comparer un autre modèle

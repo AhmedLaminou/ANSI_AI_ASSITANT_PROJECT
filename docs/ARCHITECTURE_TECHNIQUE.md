@@ -952,7 +952,7 @@ Correspondance avec les phases du document d'architecture (§34).
 | 5 | Procédure de mise à jour hors ligne | ❌ À faire |
 | 5 | Tests de charge et de sécurité | ❌ À faire |
 
-Couverture de tests, hors ligne : **278 contrôles** — `tests/test_units.py` (logique pure),
+Couverture de tests, hors ligne : **281 contrôles** — `tests/test_units.py` (logique pure),
 `tests/test_access.py` (40 contrôles de périmètre, toutes les paires de services dans les deux sens),
 `tests/test_prompts.py` (32 contrôles sur la composition des consignes), `tests/test_glossary.py`
 (24 contrôles sur les glossaires par service), `tests/test_dataset.py` (31 contrôles
@@ -1001,6 +1001,42 @@ jetons/seconde, ni RAM/VRAM, ni nombre d'utilisateurs simultanés soutenables.
    une session compromise reste valide jusqu'à 8 h. C'est devenu plus visible depuis que l'agent
    peut changer son mot de passe seul — il le fait précisément quand il le croit connu. Demande
    un identifiant de session en base, ou un numéro de version par compte inclus dans le jeton.
+5. **Mémoire conversationnelle à fenêtre fixe** — les 6 derniers messages, sans résumé des échanges
+   plus anciens.
+6. **Raisonnement du modèle émis malgré `think: false`** — `qwen3:4b` produit son raisonnement
+   interne dans le champ `content`, terminé par `</think>`, avant la réponse finale. Il est retiré
+   (`extract_answer()`) et masqué pendant le streaming, mais ces jetons sont **générés puis jetés** :
+   ils dominent le temps de réponse. C'est aujourd'hui le premier levier de latence — voir §5.8.
+7. **Coût de la reformulation** — quand la première recherche est faible, le graphe paie un appel
+   supplémentaire au modèle avant de répondre (§5.1). Compromis assumé : une réponse lente vaut mieux
+   qu'un refus injustifié, mais cela double la latence du pire cas.
+8. **Migration de schéma artisanale** — `ensure_schema()` ajoute les colonnes manquantes. Suffisant
+   pour le POC, à remplacer par Alembic avant la production.
+9. **Limitation de débit en mémoire du processus** — remise à zéro au redémarrage et non partagée
+   entre plusieurs instances. Correct pour un processus unique, à déporter (Redis ou équivalent)
+   le jour où l'API est répliquée. Vaut pour les questions comme pour les tentatives de connexion.
+10. **Vecteurs en JSON et recherche en Python sur SQLite** — subsiste sur le moteur de repli
+    uniquement ; disparaît dès que `DATABASE_URL` pointe vers PostgreSQL (§5.2).
+11. **Le matériel est aujourd'hui le facteur limitant.** Mesuré sur le poste de développement :
+    une question triviale (« réponds uniquement OK ») demande **21 s**, avec 0,5 Go de RAM libre sur
+    16 Go partagés avec l'IDE, le navigateur et les serveurs de développement. Le délai d'attente est
+    configurable (`CHAT_TIMEOUT_SECONDS`) précisément parce qu'un poste chargé dépasse facilement
+    trois minutes. Ce n'est pas un défaut du code : c'est la démonstration qu'un serveur dédié, avec
+    GPU, est nécessaire avant tout usage réel.
+12. **Le journal d'audit porte les attributs actuels de l'auteur**, pas ceux qu'il avait au moment
+    de l'événement. Un agent transféré des RH aux finances apparaît rétroactivement aux finances
+    sur toutes ses actions passées. Figer l'état demanderait de le copier à l'écriture.
+13. **Le routage de l'interface n'est pas protégé côté serveur** — il ne l'a pas à être : chaque
+    point d'entrée d'administration vérifie le rôle indépendamment de l'écran affiché. Une URL
+    devinée ne donne donc rien de plus qu'un écran vide.
+14. **L'arbre de dépendances de LangGraph est large et bouge vite.** `langgraph` tire
+    `langchain-core`, qui tire `langsmith` — un service de traçage *cloud*, inerte tant qu'aucune
+    clé n'est configurée, et dont `isolation_probe.py` démontre qu'il n'émet rien, mais présent
+    dans le colis. Le 25/09/2026 une résolution a ramené `langchain-core` 1.6.3, qui exige
+    `uuid-utils` et son binaire **non signé** : Smart App Control l'a bloqué et l'application ne
+    démarrait plus du tout. Corrigé par un plafond et un `requirements.lock.txt`.
+    Savoir si cette dépendance vaut son arbre mérite d'être reposé avant le déploiement : un
+    déploiement hors ligne paie chaque paquet transitif en surface d'audit.
 
 ---
 
@@ -1010,8 +1046,9 @@ jetons/seconde, ni RAM/VRAM, ni nombre d'utilisateurs simultanés soutenables.
 limitation de débit, protection du formulaire de connexion, mécanisme de purge, OCR local,
 PostgreSQL + pgvector, graphe de décision avec reformulation, outils métier, cloisonnement par
 service, demande d'accès et approbation, consignes et glossaires par service, sondes d'injection de
-prompt, supervision et journal consultable, profil et périmètre modifiable — et 278
-contrôles automatiques hors ligne.
+prompt et d'isolement, supervision et journal consultable, profil et changement de mot de
+passe, périmètre d'un document révisable, dépendances verrouillées — et 281 contrôles
+automatiques hors ligne.
 
 **Reste, dans cet ordre :**
 

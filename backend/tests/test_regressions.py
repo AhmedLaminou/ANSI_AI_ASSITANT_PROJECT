@@ -197,3 +197,41 @@ def test_changing_your_mind_replaces_the_verdict(administrator):
             assert len(rows) == 1, f"{len(rows)} avis enregistrés pour une seule réponse"
             assert rows[0].verdict == "useful"
             assert rows[0].question == "Une question ?", "la question doit rester attachée à l'avis"
+
+
+# --------------------------------------------------------------------------
+# La chaine de dependances doit rester installable hors ligne
+# --------------------------------------------------------------------------
+# Le 25/09/2026 l'application ne demarrait plus : une mise a jour avait amene
+# langchain-core 1.6.3, qui exige uuid-utils, dont le binaire compile n'est pas
+# signe. Smart App Control l'a bloque, et l'import de app.main echouait.
+#
+# Le correctif est un plafond dans requirements.txt. Ces controles le tiennent :
+# ils echouent tot et avec un message lisible, au lieu d'une ImportError opaque
+# a la collecte des tests.
+
+def test_the_application_imports():
+    """Le controle le plus bete et le plus utile de la suite."""
+    from app.main import app as application
+    assert application is not None
+
+
+def test_no_unsigned_binary_dependency_has_crept_back():
+    """uuid-utils embarque un .pyd non signe, refuse par Smart App Control et
+    indesirable dans un colis hors ligne. S'il revient, c'est qu'un plafond a
+    saute dans requirements.txt."""
+    import importlib.util
+    assert importlib.util.find_spec("uuid_utils") is None, (
+        "uuid-utils est reinstalle : verifier les bornes de langchain-core dans "
+        "requirements.txt (voir requirements.lock.txt pour l'ensemble teste)"
+    )
+
+
+def test_langchain_core_stays_within_the_supported_range():
+    from importlib.metadata import version
+    from packaging.version import Version
+    installed = Version(version("langchain-core"))
+    assert Version("0.3.50") <= installed < Version("0.3.61"), (
+        f"langchain-core {installed} hors des bornes testees : a partir de 0.3.61 "
+        "il exige uuid-utils, dont le binaire n'est pas signe"
+    )

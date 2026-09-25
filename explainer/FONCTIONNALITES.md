@@ -557,7 +557,7 @@ médiane : la charge de la machine domine la mesure.
 | Questions ambiguës, documents longs, documents contradictoires | ❌ aucun jeu de données |
 | Invalidation de session après changement de mot de passe | ❌ **trou réel** : une session compromise reste valide jusqu'à 8 h |
 
-**278 contrôles automatiques hors ligne**, plus six sondes nécessitant le modèle local.
+**281 contrôles automatiques hors ligne**, plus six sondes nécessitant le modèle local.
 
 ---
 
