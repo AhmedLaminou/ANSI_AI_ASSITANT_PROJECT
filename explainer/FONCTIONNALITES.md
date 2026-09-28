@@ -585,8 +585,10 @@ regroupe et chaque question devient sa propre lacune. Mesuré sur 17 questions e
 | 0,55 | 9 | 0 |
 | 0,80 | rien ne se regroupe | — |
 
-0,50 est le plus bas qui ne mélange jamais deux sujets. La marge est étroite et l'échantillon
-réduit : le seuil est réglable, et à remesurer sur de vraies questions.
+0,50 est le plus bas qui ne mélange jamais deux sujets sur cet échantillon. La marge est étroite : un
+second essai, sur cinq questions, a rangé « avance sur salaire » avec la prime de fin d'année et laissé
+« treizième mois » à part. Le regroupement aide à trier, il ne tranche pas ; le seuil est réglable, et à
+remesurer sur de vraies questions.
 
 ### Qui contacter
 

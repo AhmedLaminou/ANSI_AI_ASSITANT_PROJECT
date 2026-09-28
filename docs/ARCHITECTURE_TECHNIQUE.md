@@ -1137,8 +1137,13 @@ vecteurs déjà calculés pour la recherche, donc sans appel supplémentaire au 
 | 0,80 | aucun regroupement | — |
 
 Les paraphrases d'une même question s'étalent de 0,31 à 0,65, et des questions sans rapport montent
-jusqu'à 0,496. 0,50 est le plus bas qui ne mélange jamais deux sujets ; la marge est étroite et
-l'échantillon réduit, d'où `GAP_SIMILARITY_THRESHOLD`, à remesurer sur de vraies questions.
+jusqu'à 0,496. Sur cet échantillon, 0,50 est le plus bas qui ne mélange jamais deux sujets ; la marge est
+étroite, d'où `GAP_SIMILARITY_THRESHOLD`, à remesurer sur de vraies questions.
+
+**Un second échantillon l'a confirmé le jour même.** Sur cinq questions du corpus de test, 0,50 place
+« comment obtenir une avance sur salaire ? » avec les deux questions sur la prime de fin d'année, et
+laisse « à combien s'élève le treizième mois ? » — la même question que ces deux-là — dans un groupe à
+part. Le regroupement aide l'administrateur à trier les lacunes ; il ne tranche pas à sa place.
 
 #### Qui contacter
 
