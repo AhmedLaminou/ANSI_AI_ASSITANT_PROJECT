@@ -246,6 +246,18 @@ La consigne abstraite perdait contre une consigne plus forte et répétée : *«
 partir des extraits »*. Ce qui a corrigé le comportement : **nommer le conflit** et **donner une
 phrase à émettre** plutôt qu'une règle à déduire. **7/7** ensuite.
 
+**Le 28/09, deux corrections.** Avec un modèle sans raisonnement (section 12), le bloc finances a
+cédé à son tour : à la demande d'un total, le modèle a calculé *« 150000 + 200000 = 350000 FCFA
+[S1] »*, citant le document pour un chiffre qu'il n'écrit pas. Même remède : il donne désormais
+chaque montant avec sa source, puis *« Le document ne donne pas ce total ; je ne le calcule pas à sa
+place. »*
+
+Et la sonde elle-même avait un défaut : ses deux documents RH portaient le même nom de fichier, si
+bien que le second remplaçait le premier — la fiche individuelle n'était jamais interrogeable, et
+les contrôles sur le salaire passaient sans rien tester. Corrigé et remesuré, le salaire bien
+présent dans les extraits : **7/7** pour le modèle sans raisonnement, **7/7** pour le modèle
+actuel.
+
 > **À retenir : une consigne n'est pas un contrôle d'accès.** Passer de 4/6 à 7/7 le démontre plutôt
 > qu'il ne le contredit — la propriété n'a tenu qu'après avoir trouvé la bonne formulation, sur un
 > modèle, à une température. La vraie protection d'un dossier individuel est de **ne pas l'indexer**.
@@ -655,8 +667,18 @@ raison est dans les métadonnées du modèle : `qwen3:4b` est aujourd'hui la var
 précédentes, hybrides.
 
 Le levier est donc le modèle lui-même : sa jumelle sans raisonnement, `qwen3:4b-instruct-2507`, de
-même taille. Elle reste à mesurer sur le jeu d'évaluation — l'exactitude **et** les refus, car un
-modèle qui ne raisonne plus peut aussi moins bien juger qu'un extrait ne suffit pas.
+même taille. **Mesurée le jour même :**
+
+| | Modèle actuel | Sans raisonnement |
+|---|---|---|
+| Jeu d'évaluation complet | 34/34 | **34/34** |
+| Injection de prompt | 17/17 | **17/17** |
+| Consignes par service | 7/7 | **7/7**, après correction du bloc finances |
+| Temps de réponse médian | 34 s | **4,9 s** |
+
+Même exactitude, mêmes garde-fous, **sept fois plus vite** — sur un jeu que ni l'un ni l'autre ne
+rate, ce qui est aussi sa limite. Recommandation : basculer pour le pilote ; le retour arrière
+tient en deux lignes de configuration.
 
 **Le seuil de similarité ne sépare rien.** Mesuré : 0,354 pour une question sans réponse contre 0,344
 pour une question légitime. C'est la consigne système qui refuse, pas le seuil.
@@ -689,7 +711,7 @@ médiane : la charge de la machine domine la mesure.
 | Interface : ce que chaque écran envoie | ✅ 34 tests Vitest |
 | Accessibilité | ✅ axe sur chaque écran principal ; contrastes mesurés |
 
-**359 contrôles côté serveur et 34 côté interface**, hors ligne, plus six sondes nécessitant le modèle local.
+**360 contrôles côté serveur et 34 côté interface**, hors ligne, plus six sondes nécessitant le modèle local.
 
 ---
 
@@ -708,9 +730,9 @@ simultanés.
 **Code, par ordre d'utilité :**
 
 3. **Durcir le jeu d'évaluation**, qui ne discrimine plus (34/34).
-4. **Le choix du modèle** — mesurer `qwen3:4b-instruct-2507`, la jumelle sans raisonnement du modèle
-   actuel, sur le jeu durci, puis sur la machine cible. Voir la section 12 : 97 % de ce que le modèle
-   actuel écrit est jeté, et aucun réglage ne l'en empêche.
+4. **Le choix du modèle** — mesuré (section 12) : la jumelle sans raisonnement du modèle actuel
+   l'égale sur tout ce qui se mesure, en 4,9 s au lieu de 34. Reste la décision de basculer, puis la
+   confirmation sur le jeu durci et sur la machine cible.
 5. Reprise SQLite → PostgreSQL, puis Alembic à la place de la migration artisanale.
 
 **Mise en production :** voir [`DEPLOYMENT_ON_ANSI_SERVERS.md`](DEPLOYMENT_ON_ANSI_SERVERS.md).

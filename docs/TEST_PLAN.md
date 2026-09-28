@@ -4,7 +4,7 @@ Procédure **manuelle**, à dérouler dans l'interface avant une démonstration 
 Elle complète les contrôles automatiques, qui la précèdent :
 
 ```powershell
-cd backend;  .\.venv\Scripts\python.exe -m pytest tests/ -q     # 359 contrôles, sans modèle
+cd backend;  .\.venv\Scripts\python.exe -m pytest tests/ -q     # 360 contrôles, sans modèle
 cd frontend; npm test                                           # 34 tests d'interface, dont l'accessibilité
 ```
 

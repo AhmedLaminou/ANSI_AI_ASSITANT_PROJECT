@@ -58,8 +58,13 @@ raisonnement pour une réponse de vingt : 97 % de son travail est jeté
 ([§5.8 de `ARCHITECTURE_TECHNIQUE.md`](../docs/ARCHITECTURE_TECHNIQUE.md)). `qwen3:4b` est en effet la
 variante *Thinking-2507*, qui raisonne toujours ; aucun réglage ne l'en empêche. Un GPU accélère
 chaque jeton, une variante sans raisonnement — `qwen3:4b-instruct-2507`, même taille — en supprime
-l'essentiel : les deux se cumulent. Mesurez-la avec `tests.evaluate --model …` sur le serveur avant
-de choisir, exactitude **et** refus.
+l'essentiel : les deux se cumulent.
+
+Mesurée sur le portable le 28/09 : **même exactitude sur tout le jeu d'évaluation (34/34),
+sondes d'injection (17/17) et de consignes (7/7) réussies, 4,9 s de médiane au lieu de 34,3 s**. C'est le
+modèle recommandé pour le pilote. Rejouez `tests.evaluate`, `tests.security_probe` et
+`tests.prompt_probe` sur le serveur avant la mise en service : une consigne tenue par un modèle ne
+l'est pas forcément par le suivant — le bloc finances l'a montré.
 
 **Combien d'agents en parallèle ?** Un GPU de 24 Go sert confortablement **5 à 10 questions
 simultanées** avec un modèle 7B. Au-delà, il faut soit un second GPU, soit une file d'attente. Ce
@@ -101,7 +106,7 @@ cd app/frontend && npm ci && npm test && npm run build && cd ../..
 
 # 4. Les modèles Ollama
 #    Sur la machine connectée : ollama pull <modèle>, puis copier le magasin.
-ollama pull qwen3:4b                         # ou le modèle retenu en section 2
+ollama pull qwen3:4b-instruct-2507-q4_K_M    # le modèle retenu en section 2
 ollama pull embeddinggemma
 tar czf modeles-ollama.tar.gz -C ~/.ollama models
 
@@ -210,11 +215,11 @@ JWT_SECRET=...
 DATABASE_URL=postgresql+psycopg://ansi:LE_SECRET@127.0.0.1:5432/ansi_ai
 
 OLLAMA_BASE_URL=http://127.0.0.1:11434
-# qwen3:4b raisonne toujours (section 2). Pour un modèle qui répond directement,
-# par exemple qwen3:4b-instruct-2507-q4_K_M : OLLAMA_CHAT_REASONING=false.
-OLLAMA_CHAT_MODEL=qwen3:4b
+# Recommandé (section 2) : le modèle sans raisonnement, qui répond directement.
+# Pour revenir à qwen3:4b : OLLAMA_CHAT_MODEL=qwen3:4b et OLLAMA_CHAT_REASONING=true.
+OLLAMA_CHAT_MODEL=qwen3:4b-instruct-2507-q4_K_M
 OLLAMA_EMBEDDING_MODEL=embeddinggemma
-OLLAMA_CHAT_REASONING=true
+OLLAMA_CHAT_REASONING=false
 
 CHAT_RATE_LIMIT_PER_MINUTE=12
 LOGIN_RATE_LIMIT_PER_MINUTE=5
@@ -511,7 +516,7 @@ sudo -u ansi /opt/ansi-assistant/2026-10-15/backend/.venv/bin/python -m pip inst
 
 # 4. Vérifier avant de basculer
 cd /opt/ansi-assistant/2026-10-15/backend
-sudo -u ansi .venv/bin/python -m pytest tests/ -q          # 359 contrôles, sans modèle
+sudo -u ansi .venv/bin/python -m pytest tests/ -q          # 360 contrôles, sans modèle
 sudo -u ansi .venv/bin/python -m tests.isolation_probe     # rien ne sort
 sudo -u ansi .venv/bin/python -m tests.security_probe      # injection de prompt
 
@@ -560,8 +565,8 @@ Par honnêteté, avant que quiconque bâtisse un plan dessus :
   simultanées » de la section 2 est une estimation, pas une mesure.
 - **Le débit et la mémoire sur la machine cible.** Sur le portable : 13 à 22 jetons par seconde,
   dont 97 % de raisonnement jeté (section 2). La consommation RAM/VRAM réelle n'a jamais été relevée.
-- **Le comportement d'un modèle 7B–8B sur GPU**, ni d'une variante sans raisonnement. Tout ce qui
-  est mesuré l'a été avec `qwen3:4b` sur processeur, sur un portable chargé.
+- **Le comportement d'un modèle sur GPU.** Tout ce qui est mesuré l'a été sur processeur, sur un
+  portable chargé — y compris la variante sans raisonnement recommandée en section 2.
 - **La restauration d'une sauvegarde** dans cet environnement.
 
 Ces quatre mesures sont le premier travail à faire une fois le serveur disponible. Elles sont rapides

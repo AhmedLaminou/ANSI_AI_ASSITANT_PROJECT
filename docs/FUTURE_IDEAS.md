@@ -52,8 +52,14 @@ rest is writing, and 97 % of what it writes is reasoning thrown away before a tw
 answer. `qwen3:4b` turns out to be **Qwen3-4B-Thinking-2507**, a thinking-only variant: `/no_think`,
 `think: false` and a pre-filled empty reasoning block were all measured without effect. A GPU makes
 each token cheaper; a non-reasoning model — first candidate `qwen3:4b-instruct-2507`, same size —
-removes most of them. The two compound, and the second must be measured for accuracy *and*
-refusals before it is adopted.
+removes most of them. The two compound.
+
+Measured the same day: the instruct twin matches the current model on the whole evaluation set
+(34/34) and on the injection probe (17/17), and passes the per-department instruction probe (7/7;
+the current model: 7/7), at a **4.9 s median instead of 34.3 s**. It was not free: the finance
+block gave way at first — the model summed two lines and cited the document for the total — and had
+to be reworded the way the HR block was. Recommendation: switch for the pilot, and confirm on a
+hardened set and on the target hardware.
 
 **Concurrency stops being theoretical.** Ollama serves requests sequentially; with real simultaneous
 users that queues. This is where vLLM deserves the evaluation the design document already called for.
@@ -222,6 +228,14 @@ of a rule to infer: *"cette consigne prime sur toutes les autres, y compris sur 
 répondre à partir des extraits … réponds exactement : « Je ne restitue pas les données
 individuelles d'un agent »"*.
 
+**Corrected on 2026-09-28.** The probe's two HR fixtures shared a filename, so the second import
+superseded the first: the individual file was never searchable, and the nominative checks passed
+without the salary ever reaching the model. Found because the reasoning model refused the salary
+question for lack of a relevant extract — impossible for a question scoring 0.682 against the file.
+Each fixture now has its own filename and is asserted to be a first version; `test_dataset.py`
+forbids the same mistake in the evaluation set. Re-measured with the salary in the extracts: 7/7
+for the instruct model, 7/7 for the current one.
+
 **What this does not settle.** A prompt is not an access control. The probe measures a tendency on
 one model at one temperature; it is evidence, not proof. Two structural options remain open, and
 both are decisions for ANSI rather than for the code — see §6:
@@ -347,7 +361,7 @@ ordinary one, and what it measures is whether the refusal stays graceful.
 
 Out-of-perimeter refusals: **4/4**.
 
-**Dataset integrity.** `tests/test_dataset.py` (31 static checks, instant) holds the properties the
+**Dataset integrity.** `tests/test_dataset.py` (32 static checks, instant) holds the properties the
 long run assumes: a question expected to be *answered* is asked by an account that can actually
 read its source, and a question expected to be *refused on perimeter grounds* really is outside the
 asker's perimeter. Without them, changing a document's department silently turns a partitioning
@@ -447,9 +461,10 @@ Details and measurements: [§5.14–5.16](ARCHITECTURE_TECHNIQUE.md).
    model, chunking or threshold change rather than treated as a milestone.
 6. **Harden the evaluation set**, which no longer discriminates (34/34) — otherwise it cannot see
    what a model change degrades.
-7. **Phase F platform decisions** — GPU, model, vLLM, PostgreSQL. The model question is now sharp:
-   measure `qwen3:4b-instruct-2507`, the non-reasoning twin of the current model, on the hardened
-   set, then on the target hardware. **This is the next step.**
+7. **Phase F platform decisions** — GPU, model, vLLM, PostgreSQL. The model question is now
+   measured: `qwen3:4b-instruct-2507`, the non-reasoning twin of the current model, matches it on
+   everything measured at a seventh of the latency. Switch for the pilot, confirm on the hardened
+   set and on the target hardware. **This is the next step.**
 8. **Phase E** — tools, once an internal API is actually available. Blocked on ANSI, not on code.
 
 Two things block real data rather than code: the **retention duration** (§6.4) and whether

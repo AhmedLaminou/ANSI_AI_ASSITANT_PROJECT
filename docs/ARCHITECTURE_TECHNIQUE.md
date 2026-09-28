@@ -191,7 +191,9 @@ chaînes et non une lecture de la prose.
 | Passage | Résultat |
 |---|---|
 | Première rédaction des blocs | **4/6** |
-| Après reformulation du bloc RH | **7/7** (2026-09-17, `qwen3:4b`) |
+| Après reformulation du bloc RH | **7/7** (2026-09-17, `qwen3:4b`) — mais la sonde ne testait plus le bloc RH, voir plus bas |
+| `qwen3:4b-instruct-2507`, mêmes blocs (2026-09-28) | **6/7** — le bloc finances cède |
+| Bloc finances reformulé, sonde corrigée (2026-09-28) | **7/7** `qwen3:4b-instruct-2507` · **7/7** `qwen3:4b` |
 
 Ce qui a échoué d'abord : le bloc finances tenait — interrogé sur le total de deux lignes
 budgétaires, le modèle n'a pas produit la somme — mais le bloc RH non. À la question « quel est le
@@ -210,6 +212,36 @@ bien mieux qu'un principe.
 
 Les questions de contrôle — durée des congés, délai de préavis, plafond de dépense — reçoivent
 toujours leur réponse : le durcissement n'a pas transformé le bloc RH en refus généralisé.
+
+#### Le 28/09 : un changement de modèle, et une sonde qui ne testait plus la règle RH
+
+**Le bloc finances a cédé au changement de modèle.** Avec `qwen3:4b-instruct-2507` (§5.8), à « quel
+est le total des lignes fournitures de bureau et maintenance informatique ? », la réponse a été
+*« 150000 FCFA + 200000 FCFA = 350000 FCFA [S1] »* : un calcul, cité comme s'il venait du document.
+C'est le défaut qu'avait eu le bloc RH, et le même remède a suffi — nommer le conflit, donner la
+phrase à écrire : *« cette consigne prime sur l'obligation de répondre à la question posée … donne
+chaque montant séparément, avec sa source, puis écris exactement : « Le document ne donne pas ce
+total ; je ne le calcule pas à sa place. » »*. Deux passages à 7/7 ensuite. Cette phrase n'est pas
+comptée comme un refus (§5.14) : les montants sont donnés, rien ne manque au corpus.
+
+**La sonde ne testait plus la règle RH.** Ses deux documents RH — la fiche individuelle et la
+procédure — étaient importés sous le même nom de fichier. Or réimporter un nom de fichier crée une
+nouvelle version et retire la précédente de la recherche (§2.1) : la procédure remplaçait la fiche.
+Dans la sonde telle qu'elle était enregistrée depuis le 17/09, le salaire n'était donc jamais
+présenté au modèle, et les deux contrôles nominatifs passaient sans rien tester.
+
+Découvert parce qu'une réponse était impossible : le modèle à raisonnement a refusé la question du
+salaire faute d'extrait pertinent, alors qu'elle obtient **0,682** de similarité avec la fiche —
+mais **0,152** avec la procédure, seule restée interrogeable, sous le seuil de 0,18. Chaque document
+de la sonde a désormais son propre nom, la sonde vérifie que chacun arrive en première version, et
+`test_dataset.py` interdit la même erreur dans le jeu d'évaluation.
+
+**Remesuré, le salaire bien présent dans les extraits** : 7/7 pour `qwen3:4b-instruct-2507`,
+7/7 pour `qwen3:4b`. Le bloc RH tient réellement, sur les deux modèles — ce que le 7/7 du 17/09 ne montrait pas.
+
+**La leçon générale** : une consigne tenue par un modèle ne l'est pas forcément par le suivant, et
+une sonde qui passe n'a pas forcément testé ce qu'elle annonce. `prompt_probe` et `security_probe`
+font partie de tout changement de modèle, au même titre que `evaluate`.
 
 #### Ce que cela ne garantit pas
 
@@ -781,8 +813,9 @@ démarrage ».
 
 ### 5.8 Évaluation de la qualité, service par service
 
-**État : le harnais mesure par service ; le benchmark a trouvé la cause de la latence et le
-candidat qui la supprime — à mesurer sur le jeu complet (ci-dessous, « Le raisonnement »).**
+**État : le harnais mesure par service ; le benchmark a trouvé la cause de la latence, et le
+candidat qui la supprime a été mesuré sur le jeu complet et sur les sondes (ci-dessous, « Le
+raisonnement »).**
 
 `tests/evaluate.py` indexe le corpus de `tests/evaluation/dataset.json` — **10 documents fictifs,
 34 questions** — puis mesure :
@@ -802,6 +835,16 @@ candidat qui la supprime — à mesurer sur le jeu complet (ci-dessous, « Le ra
 .\.venv\Scripts\python.exe -m tests.evaluate --no-think         # interrupteur /no_think (voir plus bas)
 ```
 
+Le harnais et les sondes écrivent dans la base de l'application, et nettoient derrière eux. Pour
+les lancer pendant que l'application sert, ou pour essayer un modèle sans toucher au `.env`, les
+variables d'environnement suffisent :
+
+```powershell
+$env:DATABASE_URL = 'sqlite:///C:/temp/sonde.db'                 # base jetable
+$env:OLLAMA_CHAT_MODEL = 'qwen3:4b-instruct-2507-q4_K_M'; $env:OLLAMA_CHAT_REASONING = 'false'
+.\.venv\Scripts\python.exe -m tests.security_probe
+```
+
 #### Pourquoi un jeu par service
 
 Améliorer les réponses techniques peut dégrader les réponses RH sans que rien ne le signale : une
@@ -812,7 +855,7 @@ Chaque question porte le service qui la pose. En son absence, elle est posée pa
 administrateur, qui lit tous les périmètres — c'est le comportement historique du harnais, et les
 18 questions d'origine restent inchangées.
 
-`tests/test_dataset.py` (31 contrôles statiques, instantanés) tient les propriétés dont dépend le
+`tests/test_dataset.py` (32 contrôles statiques, instantanés) tient les propriétés dont dépend le
 relevé : une question attendue **répondue** est posée par un compte qui peut réellement lire sa
 source, et une question attendue **refusée pour raison de périmètre** est réellement hors du
 périmètre de celui qui la pose. Sans ces contrôles, changer le service d'un document transforme en
@@ -905,12 +948,47 @@ lui-même le bloc `<think>` avant que le modèle n'écrive un mot — d'où une 
 `</think>` sans balise ouvrante. `/no_think` appartient aux modèles Qwen3 hybrides, de la génération
 précédente ; les mentions antérieures de `/no_think` comme levier supposaient l'un de ceux-là.
 
-**Le levier est donc le modèle.** Sa jumelle sans raisonnement, `qwen3:4b-instruct-2507` — même
-architecture, même taille (2,5 Go), même quantification — isole exactement cette variable. À
-mesurer sur le jeu complet, exactitude **et** refus : un modèle qui ne raisonne plus peut aussi
-moins bien juger qu'un extrait ne suffit pas. Réglage correspondant :
-`OLLAMA_CHAT_MODEL=qwen3:4b-instruct-2507-q4_K_M` et `OLLAMA_CHAT_REASONING=false`, pour que le flux
-diffuse dès le premier jeton.
+**Le levier est donc le modèle — mesuré le jour même.** Sa jumelle sans raisonnement,
+`qwen3:4b-instruct-2507` — même architecture, même taille (2,5 Go), même quantification — isole
+exactement cette variable :
+
+| | `qwen3:4b` (Thinking-2507) | `qwen3:4b-instruct-2507` |
+|---|---|---|
+| Même question : jetons écrits | 700 à 1 750 | **43** |
+| Même question : durée | 51 à 138 s | **3,5 à 5,5 s** |
+| Même extraits, réponse absente | — | **refus, en 46 jetons** |
+| Jeu complet : exactitude | 28/28 | **28/28** |
+| dont formulation éloignée | 6/6 | **6/6** |
+| Sources correctes | 28/28 | **28/28** |
+| Refus corrects (absent du corpus) | 2/2 | **2/2** |
+| Refus hors périmètre | 4/4 | **4/4** |
+| Latence médiane, jeu complet | 34,3 s | **4,9 s** |
+| Injection de prompt (`security_probe`) | 17/17 | **17/17** |
+| Consignes par service (`prompt_probe`, sonde corrigée) | 7/7 | **7/7** |
+
+Colonne `qwen3:4b` : relevé complet du 20/09 — les sous-ensembles RH et finances, rejoués le 28/09,
+donnent la même exactitude — et sondes rejouées le 28/09. La latence maximale de l'instruct,
+77,5 s, est la première question du jeu : le chargement du modèle, sur un poste où il reste 1,4 Go
+de mémoire libre et où les modèles de conversation et d'embeddings s'évincent l'un l'autre — le
+journal d'Ollama les montre se recharger à tour de rôle. Les autres questions prennent 2,8 à 10,4 s.
+
+Le passage n'a pas été gratuit : le bloc finances a d'abord cédé avec le nouveau modèle (§2.4),
+et a dû être reformulé. C'est la raison pour laquelle les sondes font partie de la comparaison.
+
+Ce que ce tableau ne dit pas : **le jeu ne discrimine plus** (34/34 pour les deux). « Même
+exactitude » signifie « aucun écart visible sur un jeu que ni l'un ni l'autre ne rate » ; un jeu
+durci (§8) pourrait les séparer.
+
+**Recommandation : basculer pour le pilote.** Trente secondes d'attente condamnent l'usage
+quotidien, et aucune mesure disponible ne montre de perte. Le retour arrière tient dans les deux
+mêmes lignes de configuration :
+
+```ini
+OLLAMA_CHAT_MODEL=qwen3:4b-instruct-2507-q4_K_M
+OLLAMA_CHAT_REASONING=false
+```
+
+`qwen3:4b` reste le défaut du code tant que la décision n'est pas prise.
 
 **Les mesures murales, pour mémoire** — `evaluate --no-think`, même jeu, même code : RH 35,6 s puis
 29,3 s de médiane ; finances 54,8 s puis 62,6 s, dont une question passée de 28,6 s à 284,5 s sans
@@ -1141,7 +1219,7 @@ Correspondance avec les phases du document d'architecture (§34).
 | 1 — Faisabilité | Ollama + modèles locaux, inférence hors ligne | ✅ Fait |
 | 1 | Harnais d'évaluation reproductible | ✅ Fait (§5.8) |
 | 1 | Jeu d'évaluation **par service**, avec questions hors périmètre | ✅ Fait (§5.8) |
-| 1 | Benchmark de modèles : cause de la latence mesurée, candidat identifié | ⚠️ Comparaison sur le jeu complet à faire ; RAM/VRAM non mesurés (§5.8) |
+| 1 | Benchmark de modèles : cause de la latence, candidat mesuré sur le jeu complet et les sondes | ✅ Fait (§5.8) — RAM/VRAM non mesurés |
 | 2 — RAG | Extraction, découpage, embeddings locaux | ✅ Fait |
 | 2 | Index vectoriel | ✅ pgvector + HNSW, SQLite en repli (§5.2) |
 | 2 | Réponses sourcées + refus si source insuffisante | ✅ Fait |
@@ -1177,11 +1255,11 @@ Correspondance avec les phases du document d'architecture (§34).
 | 5 | Procédure de mise à jour hors ligne | ⚠️ Rédigée ([DEPLOYMENT_ON_ANSI_SERVERS.md](../explainer/DEPLOYMENT_ON_ANSI_SERVERS.md)), jamais exercée |
 | 5 | Tests de charge et de sécurité | ❌ À faire |
 
-Couverture de tests, hors ligne : **359 contrôles côté serveur** — `tests/test_units.py` (81, logique
+Couverture de tests, hors ligne : **360 contrôles côté serveur** — `tests/test_units.py` (81, logique
 pure), `tests/test_access.py` (40 contrôles de périmètre, toutes les paires de services dans les deux
 sens), `tests/test_prompts.py` (32, composition des consignes), `tests/test_knowledge.py` (32,
 lacunes, contacts, réponses validées, suites), `tests/test_administration.py` (31, supervision et
-erreurs lisibles), `tests/test_dataset.py` (31, intégrité du jeu d'évaluation),
+erreurs lisibles), `tests/test_dataset.py` (32, intégrité du jeu d'évaluation),
 `tests/test_regressions.py` (25, défauts trouvés en usage), `tests/test_glossary.py` (24,
 glossaires par service), `tests/test_documents_lifecycle.py` (24, import, responsables, révisions),
 `tests/test_sessions.py` (20, sessions et mots de passe), `tests/test_profile_and_scope.py` (19,
@@ -1201,7 +1279,7 @@ Cette section était la lacune la plus gênante du projet. Elle l'est beaucoup m
 |---|---|
 | **Injection de prompt** | ✅ **Testé** — `tests/security_probe.py`, 17 contrôles, 17 passés (2026-09-17) |
 | Tentative d'accès à un document interdit | ✅ **Testé** — `tests/test_access.py` (40 contrôles, toutes les paires de services) et `tests/security_probe.py` |
-| Données nominatives dans une réponse générée | ⚠️ **Mesuré, non garanti** — `tests/prompt_probe.py` ; tendance, pas contrôle d'accès (§2.4) |
+| Données nominatives dans une réponse générée | ⚠️ **Mesuré, non garanti** — `tests/prompt_probe.py`, corrigée le 28/09 : elle ne présentait plus le salaire au modèle ; tendance, pas contrôle d'accès (§2.4) |
 | Données sensibles dans les logs | ✅ **Testé** — `tests/isolation_probe.py` : contenu de document, mot de passe (bon et erroné) et jeton de session absents des journaux |
 | Réseau sortant | ✅ **Testé** — `tests/isolation_probe.py` intercepte `httpx` et vérifie que **tout** hôte contacté pendant un parcours complet est une adresse de bouclage |
 | Authentification | ✅ Couvert — y compris la fermeture des sessions (`tests/test_sessions.py`, 20 contrôles) |
@@ -1233,7 +1311,7 @@ RAM/VRAM, ni le nombre d'utilisateurs simultanés soutenables.
    *Thinking-2507*, qui ne sait que raisonner (§5.8). Le raisonnement est retiré (`extract_answer()`)
    et masqué pendant le streaming, mais ces jetons sont **générés puis jetés** : 97 % de ce qui est
    écrit, donc l'essentiel du temps de réponse. Ni `think: false`, ni `/no_think`, ni un bloc vide
-   pré-rempli ne le coupent ; seul un changement de modèle le fera.
+   pré-rempli ne le coupent ; seul un changement de modèle le fera — mesuré, §5.8.
 7. **Coût de la reformulation** — quand la première recherche est faible, le graphe paie un appel
    supplémentaire au modèle avant de répondre (§5.1). Compromis assumé : une réponse lente vaut mieux
    qu'un refus injustifié, mais cela double la latence du pire cas.
@@ -1285,7 +1363,8 @@ prompt et d'isolement, supervision et journal consultable, profil et changement 
 passe, périmètre d'un document révisable, dépendances verrouillées, authentification par adresse et
 sessions révocables, lacunes du corpus, contacts, réponses validées, questions de suite,
 responsables et dates de révision, import groupé et import de dossier, accessibilité, cause de la
-latence mesurée — et 359 contrôles côté serveur plus 34 côté interface, hors ligne.
+latence mesurée et modèle sans raisonnement comparé — et 360 contrôles côté serveur plus 34 côté
+interface, hors ligne.
 
 **Reste, dans cet ordre :**
 
@@ -1306,9 +1385,10 @@ latence mesurée — et 359 contrôles côté serveur plus 34 côté interface, 
 
 4. **Durcir le jeu d'évaluation** (§5.8) — 34/34 signifie qu'il ne discrimine plus. À faire avant le
    point 5 : un jeu que tout réussit ne verra pas ce qu'un changement de modèle dégrade.
-5. **Choix du modèle** : mesurer `qwen3:4b-instruct-2507`, la jumelle sans raisonnement du modèle
-   actuel, sur le jeu durci — exactitude **et** refus — puis sur la machine cible (§5.8). Premier
-   levier de qualité perçue : 97 % de ce que le modèle actuel écrit est jeté.
+5. **Choix du modèle** — mesuré le 28/09 (§5.8) : `qwen3:4b-instruct-2507`, la jumelle sans
+   raisonnement du modèle actuel, l'égale sur tout ce qui se mesure, en 4,9 s au lieu de 34,3 s de
+   médiane. Recommandation : basculer pour le pilote ; puis confirmer sur le jeu durci et sur la
+   machine cible.
 6. **Script de reprise SQLite → PostgreSQL** avant de basculer une base contenant de vrais documents.
 7. **Alembic** en remplacement de `ensure_schema()` (§7.8).
 

@@ -37,13 +37,13 @@ gouvernance et de la montée en charge** — voir
 | Lacunes du corpus, contacts par service, réponses validées, questions de suite | ✅ 32 contrôles |
 | Import groupé et import de dossier, responsables et dates de révision | ✅ 24 contrôles |
 | Interface : ce que chaque écran envoie, accessibilité (axe, contrastes mesurés) | ✅ 34 tests |
-| Choix du modèle | ⚠️ Cause de la latence mesurée, candidat identifié, comparaison à faire |
+| Choix du modèle | ✅ Mesuré : la variante sans raisonnement égale l'actuelle, en 4,9 s au lieu de 34 s — **décision à prendre** |
 | Politique de rétention et de journalisation | ❌ À arbitrer — **bloquant pour les données réelles** |
 | Les dossiers individuels peuvent-ils être indexés ? | ❌ À arbitrer — une consigne ne protège pas |
 | Conteneurisation, reverse proxy, supervision, sauvegardes | ❌ Procédure écrite, jamais exécutée |
 | Tests de charge, mesures RAM/VRAM | ❌ Jamais faits |
 
-**359 contrôles côté serveur et 34 côté interface**, hors ligne, plus six sondes nécessitant le modèle local.
+**360 contrôles côté serveur et 34 côté interface**, hors ligne, plus six sondes nécessitant le modèle local.
 
 Le détail est dans [docs/ARCHITECTURE_TECHNIQUE.md](docs/ARCHITECTURE_TECHNIQUE.md) §8. Tant que les
 deux arbitrages ci-dessus ne sont pas rendus, n'utiliser que des documents non sensibles.
@@ -55,10 +55,18 @@ Sur un poste de développement (CPU, 16 Go partagés avec l'IDE et le navigateur
 consigne et les extraits prend au modèle 0,1 à 0,3 s, tout le reste est de l'écriture — et **97 % de
 ce qu'il écrit est un raisonnement jeté** avant la réponse.
 
-Aucun réglage ne le coupe : `qwen3:4b` est la variante *Thinking-2507*, qui raisonne toujours
-(mesuré, [docs/ARCHITECTURE_TECHNIQUE.md](docs/ARCHITECTURE_TECHNIQUE.md) §5.8). Le levier est sa
-jumelle sans raisonnement, `qwen3:4b-instruct-2507`, à mesurer sur le jeu d'évaluation. Un GPU reste
-nécessaire dès qu'il y a plusieurs agents simultanés, Ollama traitant les requêtes une par une.
+Aucun réglage ne le coupe : `qwen3:4b` est la variante *Thinking-2507*, qui raisonne toujours. Sa
+jumelle sans raisonnement, `qwen3:4b-instruct-2507`, a été mesurée
+([docs/ARCHITECTURE_TECHNIQUE.md](docs/ARCHITECTURE_TECHNIQUE.md) §5.8) : **même exactitude sur tout
+le jeu (34/34), mêmes sondes de sécurité, 4,9 s de médiane au lieu de 34 s**. Pour l'essayer :
+
+```ini
+OLLAMA_CHAT_MODEL=qwen3:4b-instruct-2507-q4_K_M
+OLLAMA_CHAT_REASONING=false
+```
+
+Un GPU reste nécessaire dès qu'il y a plusieurs agents simultanés, Ollama traitant les requêtes une
+par une.
 
 Ces chiffres décrivent **ce portable, pas la cible de déploiement** : deux exécutions identiques ont
 donné 37,3 s puis 47,1 s de médiane, la charge de la machine dominant la mesure.
@@ -207,7 +215,7 @@ Puis, depuis `backend`, avec Ollama démarré :
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_units.py -q   # logique pure, rapide, sans Ollama
-.\.venv\Scripts\python.exe -m pytest tests/ -q                   # toute la suite hors ligne : 359 contrôles
+.\.venv\Scripts\python.exe -m pytest tests/ -q                   # toute la suite hors ligne : 360 contrôles
 .\.venv\Scripts\python.exe -m tests.smoke_rag                 # bout en bout, crée et supprime ses données
 .\.venv\Scripts\python.exe -m tests.evaluate                  # qualité par service (exactitude, sources, refus, latence)
 .\.venv\Scripts\python.exe -m tests.evaluate --model qwen3:0.6b   # comparer un autre modèle
@@ -264,8 +272,8 @@ Détail et justification dans [docs/ARCHITECTURE_TECHNIQUE.md](docs/ARCHITECTURE
 2. **Décider si les dossiers individuels peuvent être indexés** — une consigne au modèle n'est pas un
    contrôle d'accès.
 3. **Durcir le jeu d'évaluation**, qui ne discrimine plus (34/34).
-4. **Choisir le modèle** : mesurer `qwen3:4b-instruct-2507` sur le jeu durci, puis sur la machine
-   cible.
+4. **Basculer sur `qwen3:4b-instruct-2507`** — mesuré : même exactitude, sondes réussies, 4,9 s au lieu
+   de 34 s — puis confirmer sur le jeu durci et sur la machine cible.
 5. Reprise SQLite → PostgreSQL, puis Alembic.
 6. Mise en production — [explainer/DEPLOYMENT_ON_ANSI_SERVERS.md](explainer/DEPLOYMENT_ON_ANSI_SERVERS.md) —
    puis SSO/LDAP et le branchement sur les données vivantes de l'agence ([plan/IDEAS.md](plan/IDEAS.md)).
