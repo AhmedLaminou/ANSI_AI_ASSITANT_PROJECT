@@ -31,7 +31,7 @@ From `backend/`:
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload   # API (voir note ci-dessous)
-.\.venv\Scripts\python.exe -m pytest tests/ -q               # whole offline suite: 281 checks
+.\.venv\Scripts\python.exe -m pytest tests/ -q               # whole offline suite: 359 checks
 .\.venv\Scripts\python.exe -m pytest tests/test_units.py -q  # fast subset, no Ollama needed
 .\.venv\Scripts\python.exe -m tests.smoke_rag                # end to end, slow, needs Ollama
 .\.venv\Scripts\python.exe -m tests.evaluate                 # quality per department: accuracy, sources, refusals, latency
@@ -42,9 +42,11 @@ From `backend/`:
 .\.venv\Scripts\python.exe -m tests.isolation_probe            # no outbound traffic, no secrets in the logs
 .\.venv\Scripts\python.exe -m app.create_admin               # create an administrator
 .\.venv\Scripts\python.exe -m app.reset_password             # reset an account's password
+.\.venv\Scripts\python.exe -m app.import_folder D:\corpus --service rh --as admin@ansi.ne --dry-run
 ```
 
-From `frontend/`: `npm run dev` for development — **never on a server**.
+From `frontend/`: `npm run dev` for development — **never on a server**. `npm test` runs the
+interface tests (Vitest + axe accessibility checks).
 
 **Dependencies are pinned, and `requirements.lock.txt` is the source of truth.**
 Smart App Control blocks unsigned binaries, and that is not limited to `.exe` shims: on

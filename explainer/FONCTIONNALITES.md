@@ -1,6 +1,6 @@
 # Ce que fait l'assistant documentaire ANSI
 
-*Inventaire des fonctionnalités réellement implémentées, au 21 septembre 2026.*
+*Inventaire des fonctionnalités réellement implémentées, au 28 septembre 2026.*
 
 Ce document décrit ce qui **existe et fonctionne**, pas ce qui est prévu. Les intentions sont dans
 [`docs/FUTURE_IDEAS.md`](../docs/FUTURE_IDEAS.md), les détails techniques dans
@@ -83,6 +83,30 @@ plus interrogée mais reste consultable : une procédure retirée ne disparaît 
 
 Un document peut porter une date d'expiration. Passée cette date il reste consultable, mais
 l'assistant est prévenu qu'il est périmé et le signale dans sa réponse.
+
+### Import en masse
+
+Importer le corpus d'une agence un formulaire à la fois ne se fait pas. Trois chemins mènent au
+même endroit — une **seule fonction d'ingestion**, pour que la façon dont un document entre dans le
+corpus ne dépende pas de la porte par laquelle il arrive :
+
+- le **formulaire**, un document ;
+- l'**envoi groupé**, jusqu'à 50 fichiers d'un coup, chacun titré d'après son nom de fichier, avec
+  un compte rendu par fichier — un PDF illisible est signalé, les autres passent ;
+- l'**import de dossier depuis le serveur** (`python -m app.import_folder`), pour le premier
+  chargement réel : des centaines de fichiers sur un partage réseau. Il propose une simulation
+  (`--dry-run`) qui liste ce qui serait importé sans rien lire.
+
+> Deux défauts trouvés par les tests en l'écrivant : l'import plantait sur une console Windows au
+> milieu d'un dossier (le caractère « → » n'existe pas en cp1252), et « cv.pdf » était refusé parce
+> que la règle des trois caractères du formulaire s'appliquait aux noms de fichier.
+
+### Les questions qui suivent
+
+« Et pour un stagiaire ? » ne veut rien dire seul ; après une question sur les congés, cela veut
+dire beaucoup. Une question qui ouvre sur « et », « pareil », « dans ce cas »… et reste courte est
+cherchée **avec la question qu'elle suit**, et les documents cités par la réponse précédente passent
+devant. Détection déterministe — un mot d'ouverture et une longueur — jamais un jugement du modèle.
 
 ### Recherche seule, sans génération
 
@@ -333,9 +357,28 @@ Mots de passe hachés en **Argon2**, session dans un cookie `HttpOnly` — inacc
 de la page. Les tentatives échouées sont comptées **par compte et par adresse source**, ce qui bloque
 aussi bien le forçage d'un compte que le balayage de plusieurs.
 
-Il n'existe volontairement **aucune procédure « mot de passe oublié »** : l'assistant fonctionne hors
-ligne, il n'y a pas de relais de messagerie pour envoyer un lien, et un tel point d'entrée non
-authentifié serait une seconde porte. La remise à zéro se fait depuis le serveur.
+**L'adresse professionnelle est l'identifiant.** Un compte, un identifiant : dès qu'une adresse est
+enregistrée sur un compte, c'est elle qui ouvre la session. Les comptes antérieurs à l'adresse se
+connectent encore par leur identifiant tant qu'un administrateur n'en a pas enregistré une, et
+l'écran des comptes signale combien il en reste.
+
+**Les sessions se ferment.** Un jeton signé ne se retire pas une fois émis ; il ne peut qu'être rendu
+caduc. Chaque session porte la génération de sessions du compte, comparée à chaque requête.
+Changer son mot de passe ferme toutes les autres sessions (la sienne est réémise) ; une
+réinitialisation ou une désactivation par l'administrateur les ferme toutes ; un agent peut aussi
+« se déconnecter partout ailleurs » depuis son profil, et un administrateur fermer les sessions d'un
+poste perdu. Une session fermée ailleurs ramène proprement à l'écran de connexion.
+
+**« Mot de passe oublié » passe par l'administrateur.** Hors ligne, aucun lien ne peut partir. La
+demande est donc déposée depuis l'écran de connexion — réponse identique que l'adresse existe ou
+non, limitation par adresse, une seule demande en attente par compte — et **ne touche jamais au mot
+de passe**, sinon connaître une adresse suffirait à enfermer son titulaire dehors. L'administrateur
+la traite en définissant un mot de passe provisoire.
+
+**Tout mot de passe choisi par un administrateur est provisoire.** L'agent doit le remplacer à la
+connexion ; tant qu'il ne l'a pas fait, tout le reste répond « accès refusé ». Un administrateur ne
+doit jamais connaître un mot de passe encore en usage. La vérification est faite une fois pour tout
+le serveur, pas écran par écran.
 
 ### Injection de prompt
 
@@ -454,6 +497,22 @@ favori ou l'envoyer à un collègue. Les adresses anglaises que l'on tape nature
 Aucune bibliothèque de routage n'a été ajoutée : l'API History du navigateur et un écouteur
 suffisent, et un déploiement hors ligne a un paquet de moins à embarquer.
 
+### Accessibilité
+
+Une administration a une obligation d'accessibilité, pas une option. Les contrastes ont été
+**mesurés** sur les couleurs du thème, clair et sombre : toutes les paires dépassent le seuil de
+4,5:1, la plus juste étant le texte atténué sur fond alterné (4,95:1).
+
+Le reste ne l'était pas, et l'outil **axe** l'a montré écran par écran : des champs dont le nom
+annoncé par un lecteur d'écran avalait l'aide (« Adresse professionnelle Les comptes créés avant
+l'adresse se connectent… »), des boutons sans nom, des niveaux de titre qui sautaient, des fenêtres
+mal déclarées. Tout est corrigé, et vérifié automatiquement sur chaque écran principal.
+
+S'y ajoutent un lien « Aller au contenu », la page courante annoncée dans la navigation, la touche
+Échap sur toutes les fenêtres, un contour visible au clavier, le respect de la réduction des
+animations, et pendant la génération un statut annoncé — la phase, pas chaque mot, qui serait du
+bruit.
+
 ### Des erreurs lisibles
 
 L'API renvoie toujours `detail` sous forme de **phrase**, y compris pour une erreur de validation.
@@ -488,7 +547,63 @@ pour un humain** : chaque « incorrecte » est un cas à ajouter au jeu d'évalu
 
 ---
 
-## 11. Mesurer plutôt qu'affirmer
+## 11. Un assistant qui s'améliore
+
+Répondre ne suffit pas : il faut savoir ce qui manque, qui le sait, et ce qu'une personne a déjà
+vérifié.
+
+### Les lacunes du corpus
+
+Chaque refus est un document manquant ou un vocabulaire que le corpus n'emploie pas. Les questions
+sans réponse sont enregistrées et **regroupées par sens** dans l'administration : « quatorze
+personnes ont demandé le télétravail partiel, et le corpus n'en dit rien ». C'est l'information la
+plus exploitable que l'assistant produise.
+
+**La plupart des refus viennent du modèle, pas du graphe.** Des extraits sont presque toujours
+trouvés ; c'est le modèle qui les juge insuffisants. La détection lit donc la réponse — écouter le
+seul graphe n'en aurait capté presque aucun.
+
+**Le seuil de regroupement a été mesuré, pas deviné.** L'intuition disait 0,80 ; à 0,80, rien ne se
+regroupe et chaque question devient sa propre lacune. Mesuré sur 17 questions et 5 sujets :
+
+| Seuil | Groupes (5 sujets réels) | Groupes mélangeant deux sujets |
+|---|---|---|
+| 0,45 | 6 | **1** |
+| **0,50** | 7 | 0 |
+| 0,55 | 9 | 0 |
+| 0,80 | rien ne se regroupe | — |
+
+0,50 est le plus bas qui ne mélange jamais deux sujets. La marge est étroite et l'échantillon
+réduit : le seuil est réglable, et à remesurer sur de vraies questions.
+
+### Qui contacter
+
+« Je ne trouve pas » est honnête ; « adressez-vous à Amina, service RH » est utile. Chaque service a
+un contact, plus un contact général ; tout refus l'indique. Un agent ne voit que le contact de son
+service et le général — pas l'organigramme des autres.
+
+### Les réponses validées
+
+Les questions fréquentes étaient régénérées à chaque fois — trente secondes, et à chaque fois une
+nouvelle occasion de se tromper. Une réponse relue par un administrateur est désormais **servie
+instantanément, sans passer par le modèle**, signée de son nom et de la date. Elle se publie en un
+clic depuis une bonne réponse de l'assistant.
+
+Même règle de périmètre qu'un document. L'appariement est exact sur les mots porteurs de sens, pas
+« à peu près » : une réponse servie sous le nom d'une personne ne doit pas répondre à une question
+voisine qu'elle ne couvre pas. Et les outils passent avant : aucun texte choisi ne masque un fait sur
+le compte.
+
+### Les documents ont un responsable
+
+Un corpus sans responsable pourrit : personne ne remarque qu'une procédure est périmée avant qu'un
+agent ne l'applique. Chaque document a un **responsable** — par défaut celui qui l'importe — et une
+**date de révision**, douze mois par défaut. La supervision liste ce qui est en retard ou sans
+responsable ; chaque responsable voit ses documents et leurs échéances dans son profil.
+
+Le responsable doit pouvoir remplacer le document : un simple lecteur ne peut pas l'être.
+
+## 11 bis. Mesurer plutôt qu'affirmer
 
 Sans harnais de mesure, tout changement de modèle, de découpage ou de seuil relève de l'intuition.
 
@@ -527,8 +642,21 @@ n'améliorerait donc pas la qualité aujourd'hui.
 **Un petit modèle échoue proprement.** `qwen3:0.6b` est 25 fois plus rapide et inutilisable — mais il
 **refuse au lieu d'inventer**. Les garde-fous tiennent même avec un modèle faible.
 
-**La latence vient du raisonnement, pas de la recherche.** `qwen3:4b` génère plus de 1 800 caractères
-de raisonnement, puis les jette, pour une question à deux faits. C'est le premier levier à actionner.
+**La latence vient du raisonnement — et ce modèle-là ne sait pas s'en passer.** Mesuré le 28/09 :
+lire la consigne et les cinq extraits prend au modèle **0,1 à 0,3 s** ; tout le reste du temps, il
+écrit. À « combien de jours de congés peut-on reporter ? », la réponse utile tient en 23 caractères
+(« 10 jours ouvrables [S1] »), précédés d'environ 1 000 caractères de raisonnement : **97 % de ce qui
+est écrit est jeté**.
+
+Trois façons de couper ce raisonnement ont été mesurées — l'interrupteur `/no_think`, l'option
+`think: false` d'Ollama, un bloc de raisonnement vide pré-rempli — et **aucune ne fonctionne**. La
+raison est dans les métadonnées du modèle : `qwen3:4b` est aujourd'hui la variante
+**Qwen3-4B-Thinking-2507**, qui ne sait que raisonner. `/no_think` appartient aux versions
+précédentes, hybrides.
+
+Le levier est donc le modèle lui-même : sa jumelle sans raisonnement, `qwen3:4b-instruct-2507`, de
+même taille. Elle reste à mesurer sur le jeu d'évaluation — l'exactitude **et** les refus, car un
+modèle qui ne raisonne plus peut aussi moins bien juger qu'un extrait ne suffit pas.
 
 **Le seuil de similarité ne sépare rien.** Mesuré : 0,354 pour une question sans réponse contre 0,344
 pour une question légitime. C'est la consigne système qui refuse, pas le seuil.
@@ -547,17 +675,21 @@ médiane : la charge de la machine domine la mesure.
 | Injection de prompt | ✅ 17 contrôles |
 | Réseau sortant | ✅ trafic réellement émis, pas la configuration |
 | Fuite dans les journaux | ✅ contenu, mots de passe, jeton |
-| Authentification | ✅ |
+| Authentification | ✅ adresse, sessions révocables, mot de passe provisoire imposé — 20 contrôles |
 | Demande d'accès et approbation | ✅ 16 contrôles |
 | Supervision, journal d'audit, retours | ✅ 31 contrôles |
 | Erreurs de validation lisibles par l'agent | ✅ 22 contrôles de régression |
-| Profil, changement de mot de passe, périmètre d'un document | ✅ 20 contrôles |
+| Profil, changement de mot de passe, périmètre d'un document | ✅ 19 contrôles |
 | Données nominatives dans une réponse | ⚠️ **mesuré, non garanti** — tendance, pas contrôle d'accès |
 | Escalade de privilèges | ⚠️ partiel |
 | Questions ambiguës, documents longs, documents contradictoires | ❌ aucun jeu de données |
-| Invalidation de session après changement de mot de passe | ❌ **trou réel** : une session compromise reste valide jusqu'à 8 h |
+| Invalidation de session après changement de mot de passe | ✅ **corrigé le 28/09** — le dernier défaut de sécurité franc |
+| Lacunes, contacts, réponses validées, suites de question | ✅ 32 contrôles, modèles simulés |
+| Import (formulaire, groupé, dossier), responsables, révisions | ✅ 24 contrôles |
+| Interface : ce que chaque écran envoie | ✅ 34 tests Vitest |
+| Accessibilité | ✅ axe sur chaque écran principal ; contrastes mesurés |
 
-**281 contrôles automatiques hors ligne**, plus six sondes nécessitant le modèle local.
+**359 contrôles côté serveur et 34 côté interface**, hors ligne, plus six sondes nécessitant le modèle local.
 
 ---
 
@@ -565,18 +697,25 @@ médiane : la charge de la machine domine la mesure.
 
 **Décisions qui appartiennent à l'ANSI** — elles bloquent les données réelles, pas le code :
 
-1. La **durée de rétention** des conversations, et ce qui ne doit jamais être journalisé.
+1. La **durée de rétention** des conversations et des questions sans réponse, et ce qui ne doit
+   jamais être journalisé.
 2. Les **dossiers individuels peuvent-ils être indexés ?** Une consigne ne les protège pas.
+
+**Jamais vérifié :** questions ambiguës, documents longs, documents contradictoires ; escalade de
+privilèges au-delà de l'auto-blocage de l'administrateur ; charge, mémoire, nombre d'agents
+simultanés.
 
 **Code, par ordre d'utilité :**
 
-3. **Invalidation des sessions** après changement de mot de passe. Le seul défaut de sécurité franc.
-4. **Durcir le jeu d'évaluation**, qui ne discrimine plus.
-5. **Essayer un modèle de 3 à 8 milliards de paramètres sans phase de raisonnement** — premier levier
-   de qualité perçue.
-6. Reprise SQLite → PostgreSQL, puis Alembic à la place de la migration artisanale.
+3. **Durcir le jeu d'évaluation**, qui ne discrimine plus (34/34).
+4. **Le choix du modèle** — mesurer `qwen3:4b-instruct-2507`, la jumelle sans raisonnement du modèle
+   actuel, sur le jeu durci, puis sur la machine cible. Voir la section 12 : 97 % de ce que le modèle
+   actuel écrit est jeté, et aucun réglage ne l'en empêche.
+5. Reprise SQLite → PostgreSQL, puis Alembic à la place de la migration artisanale.
 
 **Mise en production :** voir [`DEPLOYMENT_ON_ANSI_SERVERS.md`](DEPLOYMENT_ON_ANSI_SERVERS.md).
 
-**Bloqué ailleurs :** les outils interrogeant les vrais systèmes ANSI — annuaire, absences, agenda, actualités, inventaire — attendent qu'une API interne existe. Ce que cela changerait, source par source, est détaillé dans [`plan/IDEAS.md`](../plan/IDEAS.md).
-qu'une API interne existe.
+**Ensuite :** brancher l'assistant sur les systèmes de l'agence — annuaire, absences, agenda,
+actualités, inventaire. Ce que cela changerait, source par source, est dans
+[`plan/IDEAS.md`](../plan/IDEAS.md). L'annuaire remplacerait naturellement les contacts saisis à la
+main.

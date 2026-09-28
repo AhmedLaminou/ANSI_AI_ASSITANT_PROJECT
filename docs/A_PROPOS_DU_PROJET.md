@@ -13,7 +13,7 @@ Pour la vision d'ensemble et la théorie, voir [`architecture_agent_ia_offline_A
 
 **Un assistant qui répond aux questions des agents de l'ANSI à partir des documents internes de l'ANSI,
 en citant ses sources, sans qu'aucune donnée ne sorte de l'infrastructure, et en ne montrant à chaque
-utilisateur que les documents auxquels son rôle donne accès.**
+utilisateur que les documents auxquels son rôle et son service donnent accès.**
 
 Ce n'est pas « un ChatGPT installé en local ». Le modèle de langage n'est qu'une pièce du système.
 
@@ -25,10 +25,16 @@ Ce n'est pas « un ChatGPT installé en local ». Le modèle de langage n'est qu
 1. L'agent pose une question dans l'interface
         |
         v
-2. Le backend vérifie son identité (cookie de session) et lit son rôle
+2. Le backend vérifie son identité (cookie de session) et lit, dans la base,
+   son rôle et son service
         |
         v
-3. La liste des documents est filtrée : on ne garde QUE ceux que ce rôle peut lire
+   Une salutation, une question sur son compte (« à quoi ai-je accès ? ») ou une
+   question déjà validée par un administrateur reçoit sa réponse ici, sans modèle
+        |
+        v
+3. La liste des documents est filtrée : on ne garde QUE ceux que ce compte peut
+   lire — rôle autorisé ET service (le sien, ou transverse)
         |
         v
 4. La question est transformée en vecteur par embeddinggemma (local)
@@ -40,7 +46,8 @@ Ce n'est pas « un ChatGPT installé en local ». Le modèle de langage n'est qu
 6. Les 5 extraits les plus proches sont retenus
         |
         v
-   Si aucun extrait n'est assez pertinent -> réponse : « information non trouvée »
+   Si aucun extrait n'est assez pertinent -> réponse : « information non trouvée »,
+        |                                     avec le contact du service de l'agent
         |                                     (pas d'invention)
         v
 7. Les extraits + la question + les messages récents sont envoyés à qwen3:4b (local)
@@ -49,7 +56,8 @@ Ce n'est pas « un ChatGPT installé en local ». Le modèle de langage n'est qu
 8. Le modèle rédige une réponse en français, en citant [S1], [S2]...
         |
         v
-9. La réponse, ses sources et l'échange sont enregistrés dans la base locale
+9. La réponse, ses sources et l'échange sont enregistrés dans la base locale ;
+   une question restée sans réponse est notée pour l'administrateur (« lacune »)
 ```
 
 Si aucun extrait n'est assez proche, le système ne renonce pas immédiatement : il **reformule la
@@ -70,7 +78,7 @@ et seulement ceux que l'utilisateur a le droit de voir. C'est le principe du RAG
 |---|---|---|
 | **Où vont les données** | La question part sur les serveurs du fournisseur, hors du pays | Rien ne quitte la machine : LLM, embeddings, index, documents sont locaux |
 | **Connaissance des documents ANSI** | Aucune. Il faut coller le document à chaque fois | Les documents sont importés et indexés une fois, puis interrogeables |
-| **Contrôle d'accès** | Aucun. Qui a le lien a la réponse | Chaque document porte une liste de rôles ; le filtrage a lieu **avant** la recherche |
+| **Contrôle d'accès** | Aucun. Qui a le lien a la réponse | Chaque document porte des rôles et un service ; le filtrage a lieu **avant** la recherche |
 | **Traçabilité** | Réponse sans source vérifiable | Chaque réponse cite le document et la page utilisés |
 | **En cas d'absence d'information** | Tendance à inventer une réponse plausible | Refuse explicitement : « information non présente dans les documents » |
 | **Fonctionnement sans Internet** | Impossible | Fonctionne câble débranché, une fois les modèles installés |
@@ -95,9 +103,12 @@ Cet assistant répond exactement à ces trois points.
 
 - **Souveraineté de la donnée.** Une note interne, un rapport, un règlement peut être interrogé
   sans qu'aucun octet ne transite vers un fournisseur étranger.
-- **Le droit d'en connaître appliqué à l'IA.** Un agent avec le rôle `user` ne peut pas obtenir,
-  même indirectement par une réponse du modèle, le contenu d'un document réservé à `admin`.
-  Le filtrage est fait sur la base de données, pas par une consigne donnée au modèle.
+- **Le droit d'en connaître appliqué à l'IA.** Un agent des ressources humaines ne peut pas
+  obtenir, même indirectement par une réponse du modèle, le contenu d'un document des finances ;
+  un agent avec le rôle `user` n'obtient pas celui d'un document réservé à `admin`. Le filtrage est
+  fait sur la base de données, pas par une consigne donnée au modèle.
+- **Un assistant par métier, un seul modèle.** Chaque service reçoit ses propres consignes et son
+  propre vocabulaire : « CP » est un congé payé aux RH, un crédit de paiement aux finances.
 - **Réponses vérifiables.** Chaque affirmation renvoie à un document et une page. Un agent peut
   aller vérifier avant de s'appuyer dessus pour une décision administrative.
 - **Réduction du risque d'hallucination.** Sans source suffisamment pertinente, le système refuse
@@ -105,6 +116,9 @@ Cet assistant répond exactement à ces trois points.
 - **Résistance à l'injection de prompt.** Les extraits de documents sont explicitement présentés
   au modèle comme des **données** et non comme des instructions : un document piégé contenant
   « ignore les instructions précédentes » ne détourne pas le comportement du système.
+- **Un corpus qui s'améliore.** Chaque question restée sans réponse est notée et regroupée par sens
+  pour l'administrateur : l'agence voit ce que ses agents cherchent sans le trouver. Une réponse
+  relue par un administrateur est ensuite servie instantanément, signée de son nom.
 - **Base de démonstration crédible.** Le POC permet de montrer à une direction ce que serait une
   plateforme d'IA générative interne, et de discuter budget et matériel sur des faits mesurés.
 
@@ -140,9 +154,14 @@ en production. Les limites assumées aujourd'hui :
   des colonnes.
 - La base par défaut reste SQLite. PostgreSQL + pgvector est disponible et testé, mais doit être
   activé — et basculer ne migre pas les documents déjà indexés.
-- Pas d'authentification centrale (SSO / LDAP ANSI) : les comptes sont créés et gérés à la main
-  depuis l'interface d'administration.
-- Pas d'outils métier : le modèle ne peut interroger aucune base de données applicative.
+- Pas d'authentification centrale (SSO / LDAP ANSI) : un agent demande un accès avec son adresse
+  professionnelle, et l'administrateur l'accorde ou le refuse depuis l'interface.
+- Pas de branchement sur les systèmes de l'agence : les outils lisent la base de l'assistant
+  (comptes, documents), pas encore l'annuaire, les absences ou l'agenda — voir
+  [`plan/IDEAS.md`](../plan/IDEAS.md).
+- Une réponse prend une trentaine de secondes sur le portable de développement, dont l'essentiel
+  est un raisonnement que le modèle écrit puis jette. Le choix du modèle et du matériel est la
+  prochaine décision technique ([ARCHITECTURE_TECHNIQUE.md](ARCHITECTURE_TECHNIQUE.md) §5.8).
 - Une purge de l'historique par ancienneté existe, mais **la durée de conservation n'est pas
   arbitrée** : par défaut l'historique est conservé indéfiniment.
   **C'est le point à trancher avant toute mise en production.**
@@ -195,15 +214,19 @@ sont bien présents — c'est le premier endroit à regarder en cas de problème
 | Extraits de texte + vecteurs | SQLite | Non |
 | Questions et réponses | SQLite, liées au compte de l'utilisateur | Non |
 | Comptes et mots de passe | SQLite, hachés avec Argon2 | Non |
-| Journal des actions (import, suppression, question) | SQLite | Non |
+| Journal des actions (import, suppression, question, comptes, sessions) | SQLite | Non |
+| Questions restées sans réponse, avec le service de l'agent | SQLite | Non |
+| Retours « utile / incorrecte » : la question et le verdict | SQLite | Non |
+| Réponses validées, signées par l'administrateur qui les a relues | SQLite | Non |
 
 L'historique d'un utilisateur n'est visible que par lui : chaque conversation est rattachée à son
 compte, et un utilisateur ne peut ni lire ni supprimer celles d'un autre. Une conversation supprimée
 l'est réellement, avec ses messages.
 
 La purge par ancienneté se règle avec `CONVERSATION_RETENTION_DAYS` : elle s'exécute au démarrage de
-l'API et peut être planifiée (`python -m app.purge_conversations`). Réglée à `0` — la valeur par
-défaut — rien n'est supprimé : la durée doit être **décidée**, pas subie.
+l'API et peut être planifiée (`python -m app.purge_conversations`) ; elle couvre aussi les questions
+restées sans réponse. Réglée à `0` — la valeur par défaut — rien n'est supprimé : la durée doit être
+**décidée**, pas subie.
 
 **Rappel de prudence :** tant que cette durée n'est pas arbitrée, n'utiliser que des documents non
 sensibles ou anonymisés.

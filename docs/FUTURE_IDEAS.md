@@ -46,6 +46,15 @@ scored 12/12 on answers and `qwen3:0.6b` only 2/12 ([§5.8](ARCHITECTURE_TECHNIQ
 not the bottleneck — the generation model is. A bigger model on a GPU is the single largest quality
 lever available.
 
+**Reasoning is most of the latency, and the current model cannot turn it off** (measured
+2026-09-28, [§5.8](ARCHITECTURE_TECHNIQUE.md)). Reading the prompt takes the model 0.1–0.3 s; the
+rest is writing, and 97 % of what it writes is reasoning thrown away before a twenty-character
+answer. `qwen3:4b` turns out to be **Qwen3-4B-Thinking-2507**, a thinking-only variant: `/no_think`,
+`think: false` and a pre-filled empty reasoning block were all measured without effect. A GPU makes
+each token cheaper; a non-reasoning model — first candidate `qwen3:4b-instruct-2507`, same size —
+removes most of them. The two compound, and the second must be measured for accuracy *and*
+refusals before it is adopted.
+
 **Concurrency stops being theoretical.** Ollama serves requests sequentially; with real simultaneous
 users that queues. This is where vLLM deserves the evaluation the design document already called for.
 
@@ -363,21 +372,54 @@ quality slippage shows up where it starts.
 
 ## 5. Security work that grows with departments
 
-**Prompt-injection tests — still missing, now more important.** Partitioning raises the stakes: a
-crafted document placed in one department must not be able to make the assistant reveal another's
-content. The defence exists (extracts declared untrusted in the system prompt); it has never been
-tested ([§6.1](ARCHITECTURE_TECHNIQUE.md)).
+**Prompt-injection tests — done (2026-09-17).** Partitioning raised the stakes: a crafted document
+placed in one department must not make the assistant reveal another's content.
+`tests/security_probe.py` plants canary values and checks by string comparison, 17/17
+([§6.1](ARCHITECTURE_TECHNIQUE.md)).
 
-**Cross-department leakage tests.** The systematic version of the Phase A test: for every pair of
-departments, confirm no path — chat, stream, search, preview, tools, reformulation — returns the
-other's content.
+**Cross-department leakage tests — done.** `tests/test_access.py` covers every ordered pair of
+departments in both directions (40 checks); the probe covers chat, stream, search and tools.
 
-**Session invalidation.** Changing a user's department must take effect immediately. Authorisation
-already reads role from the database on each request rather than from the token, so department should
-follow the same rule — never trust a claim carried in the JWT.
+**Session invalidation — done (2026-09-28).** The token carries only the account id and a session
+generation (`token_version`); role and department are read from the database on every request, so a
+department change takes effect on the next click. Changing one's password closes the other
+sessions; an administrator reset or a deactivation closes all of them
+([§5.9](ARCHITECTURE_TECHNIQUE.md)).
 
 **Retention policy.** Still unsettled, still the blocker before any real data, whatever the
 departmental split.
+
+**Accounts are identified by their professional address** (2026-09-28). Registration asks for it,
+sign-in uses it, and it is what a future directory integration will match on. A forgotten password
+becomes a request to the administrator — offline, no reset link can be sent — and every password an
+administrator sets is provisional, replaced by the agent at next sign-in.
+
+---
+
+## 5 bis. What the assistant learns from its own refusals (2026-09-28)
+
+Answering is not enough; the assistant also has to show what is missing, who knows, and what a
+person has already checked. All of it respects the same perimeter rule as documents.
+
+- **Corpus gaps.** Every unanswered question is recorded with the asker's department frozen at
+  write time, and grouped by meaning for the administrator — "fourteen people asked about partial
+  telework and the corpus says nothing". Most refusals come from the model judging the extracts
+  insufficient, not from the graph, so detection reads the answer. The grouping threshold was
+  measured on `embeddinggemma`: 0.45 mixes topics, 0.50 does not, 0.80 groups nothing at all.
+- **Who to contact.** One contact per department plus a general one; every refusal ends by naming
+  the contact of the asker's own department. This is a stopgap for the directory
+  ([`plan/IDEAS.md`](../plan/IDEAS.md)).
+- **Validated answers.** An answer reviewed by an administrator is served instantly, without the
+  model, signed and dated. Matching is exact on meaning-bearing words, never semantic: a signed
+  answer must not answer a neighbouring question it does not cover. Tools still come first.
+- **Follow-up questions.** "Et pour un stagiaire ?" is searched together with the question it
+  follows, and the documents the previous answer cited get a small ranking bonus — within the
+  asker's current perimeter. Deterministic, never the model's judgement.
+- **Owners and review dates.** Every document has an owner, who must be able to replace it, and a
+  review date; supervision lists what is overdue or unowned.
+- **Bulk import.** Form, batch of 50, or a whole folder from the server — one ingestion function.
+
+Details and measurements: [§5.14–5.16](ARCHITECTURE_TECHNIQUE.md).
 
 ---
 
@@ -403,10 +445,12 @@ departmental split.
 4. **Phases C and D** — prompts and glossaries. Cheap, visible improvement. ✅ done
 5. **Phase G** — measurement per department. ✅ done, and it should now be re-run after every
    model, chunking or threshold change rather than treated as a milestone.
-6. **Phase F platform decisions** — GPU, model size, vLLM, PostgreSQL. Settle the model early,
-   since it is the main quality lever and it changes what everything else is measured against.
-   **This is the next step.**
-7. **Phase E** — tools, once an internal API is actually available. Blocked on ANSI, not on code.
+6. **Harden the evaluation set**, which no longer discriminates (34/34) — otherwise it cannot see
+   what a model change degrades.
+7. **Phase F platform decisions** — GPU, model, vLLM, PostgreSQL. The model question is now sharp:
+   measure `qwen3:4b-instruct-2507`, the non-reasoning twin of the current model, on the hardened
+   set, then on the target hardware. **This is the next step.**
+8. **Phase E** — tools, once an internal API is actually available. Blocked on ANSI, not on code.
 
 Two things block real data rather than code: the **retention duration** (§6.4) and whether
 **individual files may be indexed at all** (§6.6).

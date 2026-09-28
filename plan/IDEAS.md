@@ -106,6 +106,12 @@ d'accès. Ici la protection est structurelle — le champ `salaire` ne quitte ja
 **Coût :** faible, si un annuaire existe sous forme de base ou d'API. Un export CSV quotidien est un
 repli acceptable, à condition d'afficher sa date.
 
+**Ce qui existe déjà, en attendant.** Depuis le 28/09, chaque service a un **contact** saisi à la
+main par l'administrateur, et chaque refus le cite : « je ne trouve pas » devient « adressez-vous à…
+». C'est un palliatif assumé. L'annuaire le remplacerait sans rien changer pour l'agent — même rôle,
+mais alimenté par la source au lieu d'une ressaisie qui vieillit. La table `service_contacts` est
+l'endroit où il se branche.
+
 ---
 
 ### 3.2 Absences et congés
@@ -320,6 +326,12 @@ L'ordre suit la valeur par unité de risque, pas la facilité.
 Les deux premières lignes sont réalisables sans rien changer au modèle de droits. C'est là qu'il faut
 commencer : elles démontrent la valeur, et elles laissent le temps de concevoir proprement la
 sensibilité par champ avant d'en avoir besoin.
+
+**Cet ordre est une estimation ; il peut devenir une mesure.** Depuis le 28/09, l'écran des
+**lacunes** regroupe par sens les questions restées sans réponse, service par service. Après quelques
+semaines d'usage réel, il dira ce que les agents demandent sans l'obtenir — « qui contacter pour… »,
+« suis-je en congé… », « quand a lieu… ». C'est cette donnée qui doit trancher l'ordre, plutôt que
+l'intuition de ce tableau.
 
 ---
 

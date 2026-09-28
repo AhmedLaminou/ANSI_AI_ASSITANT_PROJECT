@@ -21,8 +21,9 @@ Ce document décrit **ce qui est réellement implémenté aujourd'hui**, puis **
 | Extraction / découpage / embeddings | `pypdf`, `python-docx`, découpage maison | [`backend/app/rag.py`](../backend/app/rag.py) |
 | OCR | Tesseract local + rendu `pypdfium2` | [`backend/app/rag.py`](../backend/app/rag.py) |
 | Recherche vectorielle | `<=>` pgvector (HNSW), cosinus Python en repli SQLite | [`backend/app/rag.py`](../backend/app/rag.py) |
-| Inférence | Ollama local — `qwen3:4b` (chat), `embeddinggemma` (embeddings, 768 dimensions) | via HTTP `127.0.0.1:11434` |
+| Inférence | Ollama local — `qwen3:4b` (chat ; en réalité la variante *Thinking-2507*, qui raisonne toujours — §5.8), `embeddinggemma` (embeddings, 768 dimensions) | via HTTP `127.0.0.1:11434` |
 | Configuration | `pydantic-settings`, fichier `.env` non versionné | [`backend/app/config.py`](../backend/app/config.py) |
+| Tests d'interface | Vitest, Testing Library, axe-core (jsdom) | [`frontend/tests/`](../frontend/tests/) |
 
 ```text
 Navigateur (React)
@@ -44,7 +45,15 @@ point où les droits sont évalués.
 
 ### 2.1 Import et indexation d'un document
 
-`POST /documents/upload` — réservé aux rôles `admin` et `document_manager`.
+Réservé aux rôles `admin` et `document_manager`. Trois portes, **une seule fonction** — `ingest()`,
+dans [`app/ingestion.py`](../backend/app/ingestion.py) — pour que la façon dont un document entre
+dans le corpus ne dépende pas de la porte par laquelle il arrive :
+
+| Porte | Usage |
+|---|---|
+| `POST /documents/upload` | un document, avec ses métadonnées |
+| `POST /documents/upload-batch` | jusqu'à `DOCUMENT_BATCH_MAX_FILES` fichiers (50), titrés d'après leur nom, compte rendu par fichier |
+| `python -m app.import_folder <dossier> --service rh --as <adresse>` | premier chargement, depuis le serveur ; `--dry-run` liste sans rien lire ; s'arrête si Ollama ne répond plus |
 
 ```text
 Fichier reçu (PDF / DOCX / TXT / MD, 20 Mo max)
@@ -64,7 +73,8 @@ embed_texts()        POST /api/embed vers Ollama (embeddinggemma)
    v
 Écriture transactionnelle :
    - fichier d'origine dans backend/data/documents/<uuid>.<ext>
-   - une ligne `documents` (titre, classification, rôles autorisés, auteur)
+   - une ligne `documents` (titre, classification, rôles autorisés, service,
+     responsable, date de révision, auteur)
    - N lignes `document_chunks` (contenu, page, vecteur sérialisé en JSON)
    - une ligne `audit_events`
 ```
@@ -80,13 +90,17 @@ En cas d'erreur, la transaction est annulée et le fichier écrit sur disque est
 | Étape | Détail | Paramètre |
 |---|---|---|
 | 1. Vectorisation de la question | `embed_texts([question])` | embeddinggemma |
-| 2. **Filtrage ACL** | on ne garde que les documents dont `allowed_roles` contient le rôle de l'utilisateur | **avant** toute recherche |
+| 2. **Filtrage ACL** | on ne garde que les documents que le compte peut lire : rôle autorisé **et** service (§3 bis) | **avant** toute recherche |
 | 3. Similarité | cosinus entre la question et chaque extrait autorisé | Python, `cosine_similarity()` |
 | 4. Sélection | tri décroissant, top 5 | `selected_chunks[:5]` |
 | 5. Seuil de pertinence | si le meilleur score < `0.18` → refus explicite | garde-fou faible, voir §5.1 |
 | 6. Contexte | extraits formatés `[S1] Document : … — page N` + 6 derniers messages de la conversation | mémoire courte |
 | 7. Génération | `POST /api/chat` vers Ollama | `num_ctx=4096`, `temperature=0.15`, `think=false`, `keep_alive=10m` |
 | 8. Persistance | question, réponse, sources JSON, événement d'audit | SQLite |
+
+Avant ces étapes, le graphe (§5.1) peut répondre sans rien générer : un **outil** lit la base
+(§5.3), une **réponse validée** est servie telle quelle (§5.14). Une question courte qui prolonge la
+précédente — « et pour un stagiaire ? » — est cherchée avec elle (§5.14).
 
 ### 2.3 Streaming de la réponse
 
@@ -106,6 +120,9 @@ Le raisonnement n'est **ni affiché, ni enregistré** : il est absorbé côté s
 produit pas de bloc de raisonnement (`OLLAMA_CHAT_REASONING=false`), les jetons sont diffusés
 directement. Si le marqueur n'apparaît jamais alors qu'il était attendu, le contenu accumulé est
 traité comme la réponse — le flux ne peut pas se terminer vide.
+
+Quand la réponse du modèle est un refus, un dernier `token` ajoute **qui contacter** dans le service
+de l'agent (§5.14) : il arrive après les mots du modèle, jamais à leur place.
 
 La persistance se fait dans une session base de données propre au générateur : celle de la requête
 est déjà fermée quand le flux se termine.
@@ -219,6 +236,19 @@ En attendant l'un ou l'autre, la ligne du §6.1 reste « **mesuré, non garanti*
 
 | Table | Rôle | Points notables |
 |---|---|---|
+| `users` | comptes | `email` (identifiant de connexion, unique), `role`, `department`, `status`, `is_active`, `token_version` (génération de sessions, §5.9), `must_change_password`, hash Argon2 |
+| `documents` | métadonnées | `classification`, `allowed_roles` (chaîne CSV), `department`, `valid_until`, `owner_id` (responsable) et `review_due` (date de révision, §5.15), `version`, `is_current` |
+| `document_chunks` | index vectoriel | `content`, `page_number`, `embedding` (JSON sous SQLite, `vector(768)` sous PostgreSQL) |
+| `conversations` | fils de discussion | rattachées à `user_id` |
+| `chat_messages` | messages | `role`, `content`, `sources` (JSON, avec l'identifiant du document) |
+| `answer_feedback` | retours « utile / incorrecte » | la question et le verdict, pas la réponse (§5.13) |
+| `audit_events` | journal | imports, suppressions, questions répondues, comptes, sessions fermées, réponses validées, lacunes traitées |
+| `password_reset_requests` | « mot de passe oublié » | une demande en attente par compte ; ne touche jamais au mot de passe (§5.9) |
+| `unanswered_questions` | lacunes du corpus | question, raison, service **figé à l'écriture**, vecteur pour le regroupement (§5.14) |
+| `service_contacts` | qui contacter | un par service, plus un contact général (§5.14) |
+| `validated_answers` | réponses relues | formulations, texte, service, auteur et date de validation, nombre de fois servie (§5.14) |
+
+---|---|---|
 | `users` | comptes | `role` ∈ {`admin`, `document_manager`, `user`}, `is_active`, hash Argon2 |
 | `documents` | métadonnées | `classification`, `allowed_roles` (chaîne CSV), `created_by`, `version`, `is_current` |
 | `document_chunks` | index vectoriel | `content`, `page_number`, `embedding` **stocké en texte JSON** |
@@ -279,12 +309,16 @@ inscription ──► en attente ──► [décision de l'administrateur]
 `POST /auth/register` est **le seul point d'écriture non authentifié de
 l'application**, ce qui impose trois règles :
 
-- **Réponse identique que l'identifiant existe ou non** — même code, même corps.
+- **Réponse identique que l'adresse existe ou non** — même code, même corps.
   Sans cela, l'inscription devient un oracle d'énumération des agents de l'ANSI.
 - **Limitation par adresse source** (`REGISTRATION_RATE_LIMIT_PER_HOUR`), pour qu'on
   ne puisse pas inonder la table.
 - **Le compte est créé sans rôle ni service** : il ne lit rien. Le service demandé
   est conservé comme simple indication.
+
+La demande se fait avec l'**adresse professionnelle** et le nom complet : l'administrateur qui
+approuve doit savoir qui demande, ce qu'un pseudonyme ne dit pas. L'identifiant interne est dérivé
+de l'adresse.
 
 **L'approbation attribue ce que l'administrateur choisit**, jamais ce que le
 demandeur a réclamé. Le test le vérifie explicitement : une demande pour les RH
@@ -306,8 +340,10 @@ d'énumération et l'impossibilité de traiter deux fois la même demande.
 | Filtrage ACL avant recherche | les documents non autorisés ne sont jamais chargés ni comparés |
 | Isolation instruction / données | consigne système explicite, extraits balisés comme non fiables |
 | Refus documenté | consigne système de ne pas inventer (protection principale) + seuil de similarité (garde-fou faible, §5.1) |
-| Session | JWT HS256, 8 h, cookie `HttpOnly` + `SameSite=Lax`, `Secure` configurable |
-| Mots de passe | Argon2 via `pwdlib`, minimum 12 caractères à la création |
+| Session | JWT HS256, 8 h, cookie `HttpOnly` + `SameSite=Lax`, `Secure` configurable ; **révocable** : le jeton porte la génération de sessions du compte, comparée à chaque requête (§5.9) |
+| Identifiant | l'adresse professionnelle ; l'identifiant historique ne sert plus qu'aux comptes sans adresse |
+| Mots de passe | Argon2 via `pwdlib`, minimum 12 caractères ; tout mot de passe fixé par un administrateur est **provisoire** et doit être remplacé à la connexion |
+| Mot de passe oublié | demande déposée auprès de l'administrateur : réponse identique, limitée par adresse, une seule en attente, sans effet sur le mot de passe |
 | Cloisonnement des conversations | toute lecture passe par `get_owned_conversation()` → 404 si le fil n'appartient pas à l'appelant |
 | Surface réseau | CORS limité à l'origine du frontend, méthodes explicites |
 | Aucune API IA externe | aucune dépendance cloud dans le chemin d'exécution |
@@ -335,6 +371,10 @@ question
    │
    ▼
  route ─┬─ social ──────────────────────────────────► réponse directe (0 s)
+        │
+        ├─ outil ───────────────────────────────────► lecture de la base (≈ 0,05 s)
+        │
+        ├─ réponse validée ─────────────────────────► texte relu, servi tel quel
         │
         └─ documentaire
                │
@@ -376,8 +416,11 @@ y compris après une reformulation — une reformulation ne peut pas élargir le
 streaming côté endpoint pour que l'utilisateur voie le texte s'écrire. Mettre la génération dans un
 nœud aurait sacrifié le streaming.
 
-Quand un outil métier existera (§5.3), il s'ajoutera comme un nœud supplémentaire derrière une
-arête conditionnelle depuis un routeur, sans remettre en cause cette structure.
+Les outils (§5.3) puis les réponses validées (§5.14) s'y sont ajoutés exactement ainsi : un nœud
+chacun, derrière une arête depuis `route`, sans toucher au reste. L'ordre compte : **les outils
+passent avant les réponses validées**, pour qu'aucun texte choisi ne masque un fait lu sur le compte.
+Comme la recherche, la recherche d'une réponse validée est une fonction *injectée* qui applique
+elle-même le périmètre : le graphe ne voit jamais une réponse que le compte ne peut pas lire.
 
 #### Ce que la mesure dit réellement (2026-09-14)
 
@@ -625,7 +668,9 @@ mots, pas des colonnes.
 
 ### 5.5 Authentification centralisée (SSO / LDAP)
 
-**État : non implémenté.** Les comptes sont créés à la main par un administrateur. En production,
+**État : non implémenté.** Les comptes naissent d'une demande d'accès approuvée ou sont créés par un
+administrateur, **identifiés par l'adresse professionnelle** — ce qui prépare le rapprochement avec
+l'annuaire. En production,
 l'annuaire de l'ANSI doit devenir la source de vérité (identités, désactivation, et idéalement
 correspondance groupes annuaire → rôles documentaires).
 
@@ -638,7 +683,8 @@ Ce qui est en place :
 - journal d'événements (`audit_events`) : import, suppression, question répondue, création et
   modification de compte, réinitialisation de mot de passe ;
 - purge par ancienneté pilotée par `CONVERSATION_RETENTION_DAYS`, exécutée au démarrage de l'API et
-  disponible en commande planifiable : `python -m app.purge_conversations`.
+  disponible en commande planifiable : `python -m app.purge_conversations`. Elle couvre aussi les
+  **questions sans réponse** (§5.14), qui conservent le texte des questions.
 
 Ce qui reste à décider — et qui **ne peut pas l'être par défaut** :
 
@@ -686,7 +732,7 @@ développement Vite, une base SQLite, aucun proxy, aucune sauvegarde.
 | Réseau | poste connecté | `deny by default` en sortie, aucun accès Internet |
 | Sauvegardes | aucune | base + documents, testées par restauration |
 | Supervision | aucune | disponibilité, latence, taux de refus, erreurs |
-| Comptes | créés à la main | annuaire ANSI (SSO/LDAP) |
+| Comptes | demande d'accès et approbation, par adresse professionnelle | annuaire ANSI (SSO/LDAP) |
 
 #### Topologie cible
 
@@ -719,8 +765,8 @@ L'environnement de production n'a pas Internet. Les artefacts sont donc prépar�
 ```text
 ENVIRONNEMENT CONNECTÉ              ENVIRONNEMENT ANSI (isolé)
   ollama pull <modèle>
-  pip download -r requirements.txt
-  npm ci && npm run build
+  pip download -r requirements.lock.txt
+  npm ci && npm test && npm run build
   fichiers de langue Tesseract
         │
         ├─ vérification : empreintes, provenance, licences, versions
@@ -735,7 +781,8 @@ démarrage ».
 
 ### 5.8 Évaluation de la qualité, service par service
 
-**État : le harnais existe et mesure par service ; le benchmark comparatif de modèles reste à faire.**
+**État : le harnais mesure par service ; le benchmark a trouvé la cause de la latence et le
+candidat qui la supprime — à mesurer sur le jeu complet (ci-dessous, « Le raisonnement »).**
 
 `tests/evaluate.py` indexe le corpus de `tests/evaluation/dataset.json` — **10 documents fictifs,
 34 questions** — puis mesure :
@@ -752,6 +799,7 @@ démarrage ».
 .\.venv\Scripts\python.exe -m tests.evaluate
 .\.venv\Scripts\python.exe -m tests.evaluate --model qwen3:0.6b
 .\.venv\Scripts\python.exe -m tests.evaluate --department rh    # un seul service, mesure ciblée
+.\.venv\Scripts\python.exe -m tests.evaluate --no-think         # interrupteur /no_think (voir plus bas)
 ```
 
 #### Pourquoi un jeu par service
@@ -823,13 +871,54 @@ rapide et pratiquement inutilisable : il répond « l'information n'est pas pré
 extraits la contiennent. Point rassurant pour l'architecture : il **refuse au lieu d'inventer**, y
 compris sur les deux questions sans réponse. Les garde-fous tiennent même avec un modèle faible.
 
-**3. La latence de `qwen3:4b` vient du raisonnement, pas de la recherche.** Le compteur affiché
-pendant le streaming dépasse **1 800 caractères** de raisonnement généré puis jeté pour une question
-à deux faits.
+**3. La latence de `qwen3:4b` vient du raisonnement, pas de la recherche.** Mesuré précisément le
+28/09 — ci-dessous.
 
-Piste à tester : un modèle de taille intermédiaire (3B–8B) **sans phase de raisonnement**, qui
-devrait conserver la capacité d'extraction de `qwen3:4b` sans en payer le coût. C'est le prochain
-essai à mener, avec un relevé RAM/VRAM en parallèle, et désormais service par service.
+#### Le raisonnement : ce qu'il coûte, et pourquoi aucun interrupteur ne le coupe (2026-09-28)
+
+**Où passe le temps.** Ollama chronomètre séparément la lecture du prompt et l'écriture de la
+réponse. Même question, cinq extraits, trois tours alternés :
+
+| | Lecture du prompt | Écriture de la réponse |
+|---|---|---|
+| Volume | ≈ 1 670 jetons (consigne et cinq extraits) | 700 à 1 750 jetons |
+| Durée | **0,1 à 0,3 s** | **100 % du temps restant** — 51 à 138 s |
+| Débit | — | 13 à 22 jetons/s selon la charge du poste |
+
+**Ce qui est écrit.** À « Combien de jours de congés peut-on reporter ? », la réponse utile tient
+en 23 caractères — « 10 jours ouvrables [S1] ». Elle est précédée d'environ 1 000 caractères de
+raisonnement : **97 % de ce que le modèle écrit est jeté**. Le raisonnement n'ajoute pas de la
+latence : il *est* la latence.
+
+**Pourquoi le couper ne marche pas.** Trois moyens mesurés, aucun effet :
+
+| Moyen | Ce que c'est | Mesuré |
+|---|---|---|
+| `/no_think` en fin de question | l'interrupteur documenté de Qwen3 | 1 284 jetons écrits en médiane, contre 1 120 sans |
+| `think: false` | l'option d'Ollama, envoyée depuis le début | le raisonnement arrive dans la réponse, sans balise ouvrante |
+| Bloc de raisonnement vide pré-rempli | ce que fait le gabarit officiel de Qwen3 quand le raisonnement est désactivé | 955 à 1 505 jetons : le modèle raisonne après le bloc vide, y compris sur un prompt écrit à la main (`raw`) |
+
+L'explication est dans les métadonnées du modèle : l'étiquette `qwen3:4b` désigne aujourd'hui
+**Qwen3-4B-Thinking-2507** (`general.finetune = Thinking` ; même fichier que
+`qwen3:4b-thinking-2507-q4_K_M`), une variante qui **ne sait que raisonner**. Son gabarit ouvre
+lui-même le bloc `<think>` avant que le modèle n'écrive un mot — d'où une réponse qui contient
+`</think>` sans balise ouvrante. `/no_think` appartient aux modèles Qwen3 hybrides, de la génération
+précédente ; les mentions antérieures de `/no_think` comme levier supposaient l'un de ceux-là.
+
+**Le levier est donc le modèle.** Sa jumelle sans raisonnement, `qwen3:4b-instruct-2507` — même
+architecture, même taille (2,5 Go), même quantification — isole exactement cette variable. À
+mesurer sur le jeu complet, exactitude **et** refus : un modèle qui ne raisonne plus peut aussi
+moins bien juger qu'un extrait ne suffit pas. Réglage correspondant :
+`OLLAMA_CHAT_MODEL=qwen3:4b-instruct-2507-q4_K_M` et `OLLAMA_CHAT_REASONING=false`, pour que le flux
+diffuse dès le premier jeton.
+
+**Les mesures murales, pour mémoire** — `evaluate --no-think`, même jeu, même code : RH 35,6 s puis
+29,3 s de médiane ; finances 54,8 s puis 62,6 s, dont une question passée de 28,6 s à 284,5 s sans
+autre changement que la charge du poste. Exactitude identique. Ces écarts sont du bruit, et c'est ce
+qui a conduit à compter en jetons plutôt qu'en secondes.
+
+`OLLAMA_CHAT_NO_THINK` reste disponible : sans effet sur ce modèle, il ne sert qu'avec un modèle
+Qwen3 hybride.
 
 Attention à la variance : à `temperature 0.15`, un écart d'un ou deux points entre deux exécutions
 est du bruit, pas une régression.
@@ -851,6 +940,36 @@ compte existant est journalisé (`login_failed`).
 Ce que cela ne couvre pas : le compteur vit dans le processus (§7.9), et une attaque distribuée sur
 de nombreuses adresses **et** de nombreux comptes reste possible. Un verrouillage de compte
 persistant, décidé avec la politique de sécurité ANSI, serait la mesure suivante.
+
+#### Les sessions se ferment (2026-09-28)
+
+Un jeton signé ne se retire pas ; il ne peut qu'être rendu caduc. Chaque compte porte une
+**génération de sessions** (`token_version`), copiée dans le jeton à la connexion et comparée à
+chaque requête avec la valeur en base. L'incrémenter ferme toutes les sessions du compte :
+
+| Événement | Effet |
+|---|---|
+| L'agent change son mot de passe | ses autres sessions se ferment ; la sienne est réémise |
+| « Se déconnecter partout ailleurs », depuis le profil | idem, sans changer de mot de passe |
+| Réinitialisation par l'administrateur | toutes les sessions se ferment |
+| Désactivation du compte | toutes les sessions se ferment |
+| « Fermer les sessions », depuis l'administration (poste perdu) | toutes les sessions se ferment |
+
+Le jeton ne porte **aucun rôle** : les droits sont relus en base à chaque requête, donc un
+changement de rôle s'applique immédiatement, sans attendre la fin de la session.
+
+**Mot de passe provisoire.** Tout mot de passe choisi par un administrateur — création de compte,
+réinitialisation — pose `must_change_password`. Tant qu'il est posé, `get_current_user` refuse tout
+(`403 PASSWORD_CHANGE_REQUIRED`) sauf `/auth/me`, `/auth/password` et `/auth/logout` : la règle est
+tenue **une fois pour tout le serveur**, pas écran par écran. Un administrateur ne connaît donc
+jamais un mot de passe encore en usage.
+
+**Mot de passe oublié.** Hors ligne, aucun lien ne peut partir. `POST /auth/password-reset-request`
+dépose une demande auprès de l'administrateur : réponse identique que l'adresse existe ou non,
+limitation par adresse, une seule demande en attente par compte, et **aucun effet sur le mot de
+passe** — sinon connaître une adresse suffirait à enfermer son titulaire dehors.
+
+Couverture : `tests/test_sessions.py`, 20 contrôles.
 
 ### 5.10 Robustesse en charge
 
@@ -876,6 +995,9 @@ Mesure sur le corpus de test réel (1 365 extraits, dont un ouvrage de 1 296 ext
 
 **La génération représente près de 90 % du temps.** Optimiser la recherche n'apporterait donc
 presque rien aujourd'hui : le levier est le modèle (§5.8), puis le matériel (§7.11).
+
+La génération elle-même a été décomposée le 28/09 (§5.8) : la lecture des extraits par le modèle
+prend 0,1 à 0,3 s ; tout le reste est l'écriture, dont 97 % de raisonnement jeté.
 
 La recherche en Python reste néanmoins un coût linéaire : 0,8 s pour 1 365 extraits signifie environ
 8 s pour 15 000. C'est le seuil à partir duquel PostgreSQL + pgvector (§5.2) cesse d'être un confort
@@ -909,6 +1031,105 @@ un « incorrecte » est exactement un cas de test à ajouter. La réponse elle-m
 c'est la question qui sert à l'évaluation, et conserver moins de contenu reste le choix prudent tant
 que la politique de rétention n'est pas arbitrée.
 
+### 5.14 Ce que l'assistant apprend de ses refus
+
+**État : implémenté** — [`app/refusals.py`](../backend/app/refusals.py),
+[`app/knowledge.py`](../backend/app/knowledge.py), [`app/routes_knowledge.py`](../backend/app/routes_knowledge.py).
+
+#### Les lacunes du corpus
+
+Chaque question sans réponse est enregistrée avec sa raison — aucun document accessible, rien
+d'assez proche, ou **extraits jugés insuffisants par le modèle** — et le service de l'agent **figé
+au moment de la question** : une mutation ultérieure ne réécrit pas l'historique (le défaut du
+journal d'audit, §7.12, n'est pas reproduit).
+
+La troisième raison est de loin la plus fréquente : des extraits sont presque toujours trouvés,
+c'est le modèle qui les juge insuffisants. Le graphe seul n'en voit donc presque aucun ; la
+détection lit la réponse (`looks_like_refusal()`), avec et sans streaming.
+
+`GET /admin/gaps` regroupe les questions par sens : regroupement glouton par centroïde, sur les
+vecteurs déjà calculés pour la recherche, donc sans appel supplémentaire au modèle. Le seuil a été
+**mesuré** sur `embeddinggemma`, 17 questions, 5 sujets :
+
+| Seuil | Groupes | Groupes mélangeant deux sujets |
+|---|---|---|
+| 0,45 | 6 | 1 |
+| **0,50** | 7 | **0** |
+| 0,55 | 9 | 0 |
+| 0,80 | aucun regroupement | — |
+
+Les paraphrases d'une même question s'étalent de 0,31 à 0,65, et des questions sans rapport montent
+jusqu'à 0,496. 0,50 est le plus bas qui ne mélange jamais deux sujets ; la marge est étroite et
+l'échantillon réduit, d'où `GAP_SIMILARITY_THRESHOLD`, à remesurer sur de vraies questions.
+
+#### Qui contacter
+
+`service_contacts` : un contact par service, plus un contact général. Tout refus s'achève par une
+phrase d'orientation vers le contact **du service de l'agent**. `GET /contacts` n'expose à un agent
+que le sien et le général, pas l'organigramme des autres services.
+
+#### Les réponses validées
+
+Une réponse relue par un administrateur est servie **sans génération**, signée de son nom et de sa
+date, et comptée. Trois règles :
+
+- **Même périmètre qu'un document** : une réponse RH n'est servie qu'à qui lit le périmètre RH.
+- **Appariement exact sur les mots porteurs de sens**, pas sémantique : une réponse servie sous le
+  nom d'une personne ne doit pas répondre à une question voisine qu'elle ne couvre pas. Une
+  formulation doit compter au moins deux mots porteurs de sens, faute de quoi elle posséderait trop
+  de questions.
+- **Modifier le texte le re-signe** : la signature affichée est toujours celle de la dernière
+  personne qui l'a relu.
+
+#### Les questions de suite
+
+« Et pour un stagiaire ? » ne veut rien dire seul. Une question qui ouvre sur une formule de suite
+(« et », « pareil », « dans ce cas »…) **et** compte au plus six mots porteurs de sens est cherchée
+avec la question précédente ; les documents cités par la réponse précédente reçoivent un bonus de
+0,05 au classement. Détection déterministe, jamais un jugement du modèle. Les documents repris sont
+recoupés avec le périmètre **actuel** : une suite ne rapatrie jamais un document devenu illisible.
+
+Couverture : `tests/test_knowledge.py`, 32 contrôles, modèles simulés — dont une réponse validée
+d'un autre service jamais servie, et une question d'outil jamais masquée par une réponse validée.
+
+### 5.15 Responsables et dates de révision
+
+Un corpus sans responsable pourrit : personne ne remarque qu'une procédure est périmée avant qu'un
+agent ne l'applique. Chaque document a un **responsable** (`owner_id`) — par défaut la personne qui
+l'importe — et une **date de révision** (`review_due`), `DOCUMENT_REVIEW_MONTHS` après l'import
+(12 par défaut ; 0 n'en fixe aucune). Statuts : à jour, bientôt dû (moins de 30 jours), en retard.
+
+Le responsable doit être un compte **actif** `admin` ou `document_manager` : il doit pouvoir
+remplacer le document, ce qu'un lecteur ne peut pas. Un responsable désactivé est signalé dans la
+supervision plutôt que remplacé en silence.
+
+La supervision liste les documents en retard, bientôt dus et sans responsable ; chaque responsable
+voit les siens dans son profil.
+
+Couverture : `tests/test_documents_lifecycle.py`, 24 contrôles, embeddings simulés.
+
+### 5.16 Interface : tests et accessibilité
+
+Les 34 tests d'interface (`npm test` : Vitest, Testing Library, jsdom) vérifient **ce que chaque
+écran envoie** au serveur — l'adresse et le service à la création d'un compte, une formulation par
+ligne pour une réponse validée, une demande de mot de passe oublié adressée à l'administrateur et
+non une réinitialisation — et ce qu'il affiche de ses réponses, y compris une erreur de validation
+qui s'affichait `[object Object]`.
+
+Huit d'entre eux passent **axe-core** sur chaque écran principal. Ce qu'axe a trouvé, et qui est
+corrigé : des champs dont le nom annoncé par un lecteur d'écran avalait le texte d'aide (le nom est
+désormais le seul libellé, l'aide est reliée par `aria-describedby`), des boutons sans nom, un titre
+`h1` suivi d'un `h3`, un `role="dialog"` posé sur un formulaire, des listes de filtre sans nom.
+
+Les contrastes ont été **calculés** sur les couleurs du thème, clair et sombre : toutes les paires
+texte/fond dépassent 4,5:1, la plus juste à 4,95:1 (texte atténué sur fond alterné). S'y ajoutent
+un lien d'évitement, la page courante annoncée (`aria-current`), la touche Échap sur toutes les
+fenêtres, un contour visible au clavier, `prefers-reduced-motion`, et pendant la génération un
+statut annoncé par phase plutôt que mot par mot.
+
+Ce que ce n'est pas : un audit RGAA. axe détecte ce qui se mesure automatiquement ; une navigation
+réelle au lecteur d'écran n'a pas été faite.
+
 ---
 
 ## 6. Tableau de synthèse
@@ -920,7 +1141,7 @@ Correspondance avec les phases du document d'architecture (§34).
 | 1 — Faisabilité | Ollama + modèles locaux, inférence hors ligne | ✅ Fait |
 | 1 | Harnais d'évaluation reproductible | ✅ Fait (§5.8) |
 | 1 | Jeu d'évaluation **par service**, avec questions hors périmètre | ✅ Fait (§5.8) |
-| 1 | Benchmark comparatif de modèles, mesures RAM/VRAM | ❌ À faire |
+| 1 | Benchmark de modèles : cause de la latence mesurée, candidat identifié | ⚠️ Comparaison sur le jeu complet à faire ; RAM/VRAM non mesurés (§5.8) |
 | 2 — RAG | Extraction, découpage, embeddings locaux | ✅ Fait |
 | 2 | Index vectoriel | ✅ pgvector + HNSW, SQLite en repli (§5.2) |
 | 2 | Réponses sourcées + refus si source insuffisante | ✅ Fait |
@@ -945,20 +1166,26 @@ Correspondance avec les phases du document d'architecture (§34).
 | 4 | Mécanisme de purge de l'historique | ✅ Fait (§5.6) |
 | 4 | Journal d'audit, écrit **et consultable** (§5.6) | ✅ Fait |
 | 5 | Supervision par service côté administrateur | ✅ Fait (§5.6) |
-| 4 | Invalidation des sessions après changement de mot de passe | ❌ À faire (§7.4) |
+| 2 | Import groupé et import de dossier, une seule fonction d'ingestion | ✅ Fait (§2.1) |
+| 2 | Responsables et dates de révision des documents | ✅ Fait (§5.15) |
+| 3 | Lacunes du corpus, contacts, réponses validées, questions de suite | ✅ Fait (§5.14) |
+| 5 | Tests d'interface et accessibilité | ✅ Fait (§5.16) |
+| 4 | Sessions révocables, mot de passe provisoire imposé, mot de passe oublié via l'administrateur | ✅ Fait (§5.9) |
 | 4 | **Politique** de rétention et de journalisation | ❌ À arbitrer — **bloquant pour la production** |
 | 4 | SSO / LDAP | ❌ À faire |
 | 5 — Production | Docker, reverse proxy, supervision, sauvegardes | ❌ À faire |
-| 5 | Procédure de mise à jour hors ligne | ❌ À faire |
+| 5 | Procédure de mise à jour hors ligne | ⚠️ Rédigée ([DEPLOYMENT_ON_ANSI_SERVERS.md](../explainer/DEPLOYMENT_ON_ANSI_SERVERS.md)), jamais exercée |
 | 5 | Tests de charge et de sécurité | ❌ À faire |
 
-Couverture de tests, hors ligne : **281 contrôles** — `tests/test_units.py` (logique pure),
-`tests/test_access.py` (40 contrôles de périmètre, toutes les paires de services dans les deux sens),
-`tests/test_prompts.py` (32 contrôles sur la composition des consignes), `tests/test_glossary.py`
-(24 contrôles sur les glossaires par service), `tests/test_dataset.py` (31 contrôles
-d'intégrité du jeu d'évaluation), `tests/test_regressions.py` (défauts trouvés en usage) et
-`tests/test_administration.py` (31 contrôles sur la supervision et les erreurs lisibles) et
-`tests/test_profile_and_scope.py` (20 contrôles sur le profil et le périmètre d'un document).
+Couverture de tests, hors ligne : **359 contrôles côté serveur** — `tests/test_units.py` (81, logique
+pure), `tests/test_access.py` (40 contrôles de périmètre, toutes les paires de services dans les deux
+sens), `tests/test_prompts.py` (32, composition des consignes), `tests/test_knowledge.py` (32,
+lacunes, contacts, réponses validées, suites), `tests/test_administration.py` (31, supervision et
+erreurs lisibles), `tests/test_dataset.py` (31, intégrité du jeu d'évaluation),
+`tests/test_regressions.py` (25, défauts trouvés en usage), `tests/test_glossary.py` (24,
+glossaires par service), `tests/test_documents_lifecycle.py` (24, import, responsables, révisions),
+`tests/test_sessions.py` (20, sessions et mots de passe), `tests/test_profile_and_scope.py` (19,
+profil et périmètre d'un document) — **et 34 côté interface** (`npm test`, §5.16).
 
 Sondes nécessitant Ollama : `tests/smoke_rag.py` (bout en bout), `tests/security_probe.py`
 (injection de prompt et fuite entre services), `tests/isolation_probe.py` (réseau sortant et
@@ -977,15 +1204,17 @@ Cette section était la lacune la plus gênante du projet. Elle l'est beaucoup m
 | Données nominatives dans une réponse générée | ⚠️ **Mesuré, non garanti** — `tests/prompt_probe.py` ; tendance, pas contrôle d'accès (§2.4) |
 | Données sensibles dans les logs | ✅ **Testé** — `tests/isolation_probe.py` : contenu de document, mot de passe (bon et erroné) et jeton de session absents des journaux |
 | Réseau sortant | ✅ **Testé** — `tests/isolation_probe.py` intercepte `httpx` et vérifie que **tout** hôte contacté pendant un parcours complet est une adresse de bouclage |
-| Authentification | ✅ Couvert |
+| Authentification | ✅ Couvert — y compris la fermeture des sessions (`tests/test_sessions.py`, 20 contrôles) |
 | Escalade de privilèges | ⚠️ Partiel : l'auto-blocage d'un administrateur est testé, pas le reste |
 
 Côté §35 « Qualité », ne sont pas couverts : questions ambiguës, documents longs, et **documents
 contradictoires** — ce dernier cas figure pourtant dans [TEST_PLAN.md](TEST_PLAN.md) sans jeu de
 données associé.
 
-Côté §35 « Performance », seule la latence est mesurée : ni temps jusqu'au premier jeton, ni
-jetons/seconde, ni RAM/VRAM, ni nombre d'utilisateurs simultanés soutenables.
+Côté §35 « Performance », sont mesurés la latence et, depuis le 28/09, le débit (13 à 22 jetons/s
+sur le poste) et la part du raisonnement (§5.8). Le temps jusqu'au premier jeton **visible** s'en
+déduit : avec un modèle qui raisonne, c'est toute la durée du raisonnement. Ne sont mesurés ni la
+RAM/VRAM, ni le nombre d'utilisateurs simultanés soutenables.
 
 ---
 
@@ -996,17 +1225,15 @@ jetons/seconde, ni RAM/VRAM, ni nombre d'utilisateurs simultanés soutenables.
 2. **ACL au niveau du document uniquement** — pas de restriction par section ou par page.
 3. **Pas de pagination** — `GET /documents` renvoie tout. Sans effet à l'échelle actuelle, bloquant
    à quelques centaines de documents.
-4. **Pas d'invalidation de session** — ni une réinitialisation par l'administrateur, ni le
-   changement par l'agent lui-même (`POST /auth/password`) ne révoquent les jetons déjà émis :
-   une session compromise reste valide jusqu'à 8 h. C'est devenu plus visible depuis que l'agent
-   peut changer son mot de passe seul — il le fait précisément quand il le croit connu. Demande
-   un identifiant de session en base, ou un numéro de version par compte inclus dans le jeton.
+4. ~~**Pas d'invalidation de session**~~ — **résolu le 28/09** : génération de sessions par compte,
+   comparée à chaque requête (§5.9).
 5. **Mémoire conversationnelle à fenêtre fixe** — les 6 derniers messages, sans résumé des échanges
    plus anciens.
-6. **Raisonnement du modèle émis malgré `think: false`** — `qwen3:4b` produit son raisonnement
-   interne dans le champ `content`, terminé par `</think>`, avant la réponse finale. Il est retiré
-   (`extract_answer()`) et masqué pendant le streaming, mais ces jetons sont **générés puis jetés** :
-   ils dominent le temps de réponse. C'est aujourd'hui le premier levier de latence — voir §5.8.
+6. **Le modèle raisonne toujours, et `think: false` n'y change rien** — `qwen3:4b` est la variante
+   *Thinking-2507*, qui ne sait que raisonner (§5.8). Le raisonnement est retiré (`extract_answer()`)
+   et masqué pendant le streaming, mais ces jetons sont **générés puis jetés** : 97 % de ce qui est
+   écrit, donc l'essentiel du temps de réponse. Ni `think: false`, ni `/no_think`, ni un bloc vide
+   pré-rempli ne le coupent ; seul un changement de modèle le fera.
 7. **Coût de la reformulation** — quand la première recherche est faible, le graphe paie un appel
    supplémentaire au modèle avant de répondre (§5.1). Compromis assumé : une réponse lente vaut mieux
    qu'un refus injustifié, mais cela double la latence du pire cas.
@@ -1037,6 +1264,14 @@ jetons/seconde, ni RAM/VRAM, ni nombre d'utilisateurs simultanés soutenables.
     démarrait plus du tout. Corrigé par un plafond et un `requirements.lock.txt`.
     Savoir si cette dépendance vaut son arbre mérite d'être reposé avant le déploiement : un
     déploiement hors ligne paie chaque paquet transitif en surface d'audit.
+15. **La détection des refus du modèle lit sa prose.** `looks_like_refusal()` reconnaît des formules
+    (« n'est pas présente », « ne figure pas »…) ; une tournure nouvelle échappe au décompte des
+    lacunes. Le défaut est silencieux — une lacune non comptée, jamais une réponse altérée — mais un
+    changement de modèle doit s'accompagner d'une relecture de ces formules.
+16. **Les contacts de service sont saisis à la main.** L'annuaire de l'agence les remplacera
+    ([`plan/IDEAS.md`](../plan/IDEAS.md)).
+17. **Le regroupement des lacunes est recalculé à chaque consultation**, en mémoire. Suffisant pour
+    quelques milliers de questions non résolues ; au-delà, le figer à l'écriture.
 
 ---
 
@@ -1047,8 +1282,10 @@ limitation de débit, protection du formulaire de connexion, mécanisme de purge
 PostgreSQL + pgvector, graphe de décision avec reformulation, outils métier, cloisonnement par
 service, demande d'accès et approbation, consignes et glossaires par service, sondes d'injection de
 prompt et d'isolement, supervision et journal consultable, profil et changement de mot de
-passe, périmètre d'un document révisable, dépendances verrouillées — et 281 contrôles
-automatiques hors ligne.
+passe, périmètre d'un document révisable, dépendances verrouillées, authentification par adresse et
+sessions révocables, lacunes du corpus, contacts, réponses validées, questions de suite,
+responsables et dates de révision, import groupé et import de dossier, accessibilité, cause de la
+latence mesurée — et 359 contrôles côté serveur plus 34 côté interface, hors ligne.
 
 **Reste, dans cet ordre :**
 
@@ -1067,18 +1304,17 @@ automatiques hors ligne.
 
 *Code*
 
-4. **Invalidation des sessions** après changement de mot de passe (§7.4). Trou réel : une session
-   compromise reste valide jusqu'à 8 h.
-5. **Durcir le jeu d'évaluation** (§5.8) — 34/34 signifie qu'il ne discrimine plus, donc qu'il ne
-   détecterait plus une régression.
-6. **Benchmark de modèles**, en particulier un modèle **sans raisonnement** : les jetons de
-   raisonnement dominent la latence (§7.6). Premier levier de qualité perçue.
-7. **Script de reprise SQLite → PostgreSQL** avant de basculer une base contenant de vrais documents.
-8. **Alembic** en remplacement de `ensure_schema()` (§7.8).
+4. **Durcir le jeu d'évaluation** (§5.8) — 34/34 signifie qu'il ne discrimine plus. À faire avant le
+   point 5 : un jeu que tout réussit ne verra pas ce qu'un changement de modèle dégrade.
+5. **Choix du modèle** : mesurer `qwen3:4b-instruct-2507`, la jumelle sans raisonnement du modèle
+   actuel, sur le jeu durci — exactitude **et** refus — puis sur la machine cible (§5.8). Premier
+   levier de qualité perçue : 97 % de ce que le modèle actuel écrit est jeté.
+6. **Script de reprise SQLite → PostgreSQL** avant de basculer une base contenant de vrais documents.
+7. **Alembic** en remplacement de `ensure_schema()` (§7.8).
 
 *Mise en production*
 
-9. **SSO / LDAP**, puis **conteneurisation, supervision, sauvegardes**, procédure de mise à jour
-    hors ligne, tests de charge.
-10. **Limitation de débit partagée** (§7.9) et **pagination** de `GET /documents` (§7.3), le jour où
-    l'API est répliquée ou le corpus dépasse quelques centaines de documents.
+8. **SSO / LDAP**, puis **conteneurisation, supervision, sauvegardes**, procédure de mise à jour
+   hors ligne, tests de charge.
+9. **Limitation de débit partagée** (§7.9) et **pagination** de `GET /documents` (§7.3), le jour où
+   l'API est répliquée ou le corpus dépasse quelques centaines de documents.

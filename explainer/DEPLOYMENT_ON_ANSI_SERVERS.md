@@ -1,7 +1,7 @@
 # Déploiement sur les serveurs de l'ANSI
 
 *Procédure de mise en production, du poste de développement aux serveurs de l'agence.*
-*Rédigé le 21 septembre 2026.*
+*Rédigé le 21 septembre 2026, mis à jour le 28 septembre.*
 
 Ce document est un **mode opératoire**, pas une discussion d'architecture — celle-ci est au
 [§5.7 de `ARCHITECTURE_TECHNIQUE.md`](../docs/ARCHITECTURE_TECHNIQUE.md). Il suppose un serveur Linux
@@ -29,7 +29,7 @@ sur le réseau interne ANSI, sans accès Internet.
 | Frontend | `npm run dev` | fichiers compilés servis par **nginx** |
 | Backend | `uvicorn --reload` | service **systemd**, plusieurs processus |
 | Accès | `localhost` | **HTTPS** sur le réseau interne |
-| Comptes | créés à la main | même chose, puis SSO/LDAP plus tard |
+| Comptes | demande d'accès par adresse professionnelle, approuvée par l'administrateur | même chose, puis SSO/LDAP |
 
 Rien dans le code ne dépend de Windows. Les seuls points d'attention sont les chemins (`TESSERACT_CMD`)
 et le fait que `.exe` disparaît.
@@ -51,6 +51,15 @@ C'est le seul poste où le matériel décide de la qualité perçue.
 
 Sans GPU, comptez les latences mesurées sur le portable — 30 à 100 secondes par réponse — ce qui
 n'est pas utilisable pour un usage quotidien.
+
+**Quel modèle ? Un modèle qui ne raisonne pas, si l'exactitude tient.** Le temps de réponse est
+proportionnel à ce que le modèle écrit, et le modèle actuel écrit environ mille jetons de
+raisonnement pour une réponse de vingt : 97 % de son travail est jeté
+([§5.8 de `ARCHITECTURE_TECHNIQUE.md`](../docs/ARCHITECTURE_TECHNIQUE.md)). `qwen3:4b` est en effet la
+variante *Thinking-2507*, qui raisonne toujours ; aucun réglage ne l'en empêche. Un GPU accélère
+chaque jeton, une variante sans raisonnement — `qwen3:4b-instruct-2507`, même taille — en supprime
+l'essentiel : les deux se cumulent. Mesurez-la avec `tests.evaluate --model …` sur le serveur avant
+de choisir, exactitude **et** refus.
 
 **Combien d'agents en parallèle ?** Un GPU de 24 Go sert confortablement **5 à 10 questions
 simultanées** avec un modèle 7B. Au-delà, il faut soit un second GPU, soit une file d'attente. Ce
@@ -85,13 +94,14 @@ rm -rf app/.git
 #    testées. Voir l'encadré ci-dessous — ce n'est pas un détail.
 python3.11 -m pip download -r app/backend/requirements.lock.txt -d wheels
 
-# 3. Le frontend compilé (le serveur n'a pas besoin de Node)
-cd app/frontend && npm ci && npm run build && cd ../..
+# 3. Le frontend compilé (le serveur n'a pas besoin de Node) ; ses tests passent ici,
+#    puisque le serveur ne pourra pas les lancer
+cd app/frontend && npm ci && npm test && npm run build && cd ../..
 # le résultat est dans app/frontend/dist/
 
 # 4. Les modèles Ollama
 #    Sur la machine connectée : ollama pull <modèle>, puis copier le magasin.
-ollama pull qwen3:4b
+ollama pull qwen3:4b                         # ou le modèle retenu en section 2
 ollama pull embeddinggemma
 tar czf modeles-ollama.tar.gz -C ~/.ollama models
 
@@ -200,6 +210,8 @@ JWT_SECRET=...
 DATABASE_URL=postgresql+psycopg://ansi:LE_SECRET@127.0.0.1:5432/ansi_ai
 
 OLLAMA_BASE_URL=http://127.0.0.1:11434
+# qwen3:4b raisonne toujours (section 2). Pour un modèle qui répond directement,
+# par exemple qwen3:4b-instruct-2507-q4_K_M : OLLAMA_CHAT_REASONING=false.
 OLLAMA_CHAT_MODEL=qwen3:4b
 OLLAMA_EMBEDDING_MODEL=embeddinggemma
 OLLAMA_CHAT_REASONING=true
@@ -207,6 +219,13 @@ OLLAMA_CHAT_REASONING=true
 CHAT_RATE_LIMIT_PER_MINUTE=12
 LOGIN_RATE_LIMIT_PER_MINUTE=5
 REGISTRATION_RATE_LIMIT_PER_HOUR=5
+
+# Chaque document importé doit être relu par son responsable après ce nombre de mois.
+DOCUMENT_REVIEW_MONTHS=12
+DOCUMENT_BATCH_MAX_FILES=50
+# Regroupement des questions sans réponse. Mesuré sur embeddinggemma : ne changer
+# qu'avec le modèle d'embedding, et après une nouvelle mesure.
+GAP_SIMILARITY_THRESHOLD=0.50
 
 # ⚠️ 0 conserve indéfiniment. À renseigner avant toute donnée réelle (section 9).
 CONVERSATION_RETENTION_DAYS=0
@@ -361,7 +380,7 @@ VITE_API_URL=https://assistant.ansi.ne/api npm run build
 ## 7. Premier démarrage
 
 ```bash
-# 1. Créer l'administrateur central (demande identifiant, service, mot de passe)
+# 1. Créer l'administrateur central (demande l'adresse professionnelle, le service, le mot de passe)
 sudo -u ansi /opt/ansi-assistant/current/backend/.venv/bin/python -m app.create_admin
 
 # 2. Vérifier que l'application répond
@@ -377,10 +396,29 @@ preuve que la promesse d'isolement tient dans l'environnement réel, avec la con
 
 Puis, dans l'ordre :
 
-1. Créer les comptes, **avec un rôle et un service** pour chacun.
-2. Importer d'abord les documents **transverses** — règlement intérieur, charte informatique.
-3. Importer les documents de chaque service, en choisissant le bon service à l'import.
-4. Vérifier avec un compte de chaque service qu'il voit le sien et pas celui des autres.
+1. Renseigner les **contacts de service** (Administration → Contacts), et un contact général : c'est
+   vers eux que chaque refus oriente l'agent.
+2. Créer les comptes — chacun avec son **adresse professionnelle**, un rôle et un service. Le mot
+   de passe fixé par l'administrateur est provisoire : l'agent le remplace à sa première connexion.
+   Ou laisser les agents déposer eux-mêmes leur demande d'accès, puis l'approuver.
+3. Importer d'abord les documents **transverses** — règlement intérieur, charte informatique.
+4. Importer les documents de chaque service, en choisissant le bon service à l'import.
+5. Vérifier avec un compte de chaque service qu'il voit le sien et pas celui des autres.
+
+Un corpus existant se charge **depuis le serveur**, dossier par dossier, plutôt que fichier par
+fichier dans le navigateur. Simulez d'abord : `--dry-run` liste ce qui serait importé sans rien lire.
+
+```bash
+cd /opt/ansi-assistant/current/backend
+sudo -u ansi .venv/bin/python -m app.import_folder /srv/corpus/transverse \
+     --service transverse --as admin@ansi.ne --dry-run
+sudo -u ansi .venv/bin/python -m app.import_folder /srv/corpus/rh \
+     --service rh --as admin@ansi.ne --owner responsable.rh@ansi.ne --recursive
+```
+
+Chaque document reçoit un responsable (`--owner`, sinon le compte qui importe) et une date de
+révision ; l'import s'arrête proprement si le modèle d'embedding cesse de répondre, plutôt que
+d'indexer la moitié d'un dossier sans le dire.
 
 > **Suggestion pour une mise en service visible.** Le public visé comprend des stagiaires, et leurs
 > questions sont prévisibles : congés, contacts, outils à installer, conventions de code. Un petit
@@ -447,11 +485,13 @@ Une consigne n'est pas un contrôle d'accès. Deux options, toutes deux peu coû
    appliqué avant le modèle, testable comme l'est le cloisonnement. Impose qu'un exploitant ne
    mélange pas dossiers individuels et règles dans un même document.
 
-### 9.3 Un défaut connu à corriger avant la mise en service
+### 9.3 Le défaut des sessions est corrigé
 
-**Changer un mot de passe ne révoque pas les sessions déjà ouvertes.** Une session compromise reste
-valide jusqu'à 8 heures. Le correctif est court — un identifiant de session en base, ou un numéro de
-version par compte inclus dans le jeton — et devrait être fait avant l'ouverture aux agents.
+Cette section signalait que changer un mot de passe ne fermait pas les sessions ouvertes. **Corrigé
+le 28 septembre** : changer son mot de passe ferme les autres sessions de l'agent ; une
+réinitialisation ou une désactivation par l'administrateur les ferme toutes ; un administrateur peut
+aussi fermer les sessions d'un poste perdu. Rien n'est plus à corriger avant l'ouverture aux agents
+de ce côté-là.
 
 ---
 
@@ -471,7 +511,7 @@ sudo -u ansi /opt/ansi-assistant/2026-10-15/backend/.venv/bin/python -m pip inst
 
 # 4. Vérifier avant de basculer
 cd /opt/ansi-assistant/2026-10-15/backend
-sudo -u ansi .venv/bin/python -m pytest tests/ -q          # 281 contrôles, sans modèle
+sudo -u ansi .venv/bin/python -m pytest tests/ -q          # 359 contrôles, sans modèle
 sudo -u ansi .venv/bin/python -m tests.isolation_probe     # rien ne sort
 sudo -u ansi .venv/bin/python -m tests.security_probe      # injection de prompt
 
@@ -501,6 +541,9 @@ migration artisanale ajoute des colonnes, elle ne sait ni en renommer ni en supp
 | Espace disque | `df` | alerte à 80 % |
 | Mémoire GPU | `nvidia-smi` | alerte à 90 % |
 | Échecs de connexion | journal d'audit | pic inhabituel |
+| Demandes de mot de passe | Administration → Comptes | chaque jour ouvré : un agent attend |
+| Lacunes du corpus | Administration → Lacunes | chaque semaine : un groupe est un document à écrire |
+| Documents à réviser | Administration → Supervision | chaque mois |
 
 Les journaux applicatifs vont dans `journalctl -u ansi-assistant`. La sonde d'isolement vérifie qu'ils
 ne contiennent ni contenu de document ni secret — **relancez-la après tout changement de niveau de
@@ -515,9 +558,10 @@ Par honnêteté, avant que quiconque bâtisse un plan dessus :
 
 - **La charge.** Aucun test de montée en charge n'a été fait. Le chiffre de « 5 à 10 questions
   simultanées » de la section 2 est une estimation, pas une mesure.
-- **Le temps jusqu'au premier jeton**, les jetons par seconde, la consommation RAM/VRAM réelle.
-- **Le comportement d'un modèle 7B–8B sur GPU.** Tout ce qui est mesuré l'a été avec `qwen3:4b` sur
-  processeur, sur un portable chargé.
+- **Le débit et la mémoire sur la machine cible.** Sur le portable : 13 à 22 jetons par seconde,
+  dont 97 % de raisonnement jeté (section 2). La consommation RAM/VRAM réelle n'a jamais été relevée.
+- **Le comportement d'un modèle 7B–8B sur GPU**, ni d'une variante sans raisonnement. Tout ce qui
+  est mesuré l'a été avec `qwen3:4b` sur processeur, sur un portable chargé.
 - **La restauration d'une sauvegarde** dans cet environnement.
 
 Ces quatre mesures sont le premier travail à faire une fois le serveur disponible. Elles sont rapides
