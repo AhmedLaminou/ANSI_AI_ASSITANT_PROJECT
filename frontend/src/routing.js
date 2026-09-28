@@ -20,6 +20,9 @@ export const ROUTES = [
   { tab: 'admin', path: '/administration', section: 'supervision' },
   { tab: 'admin', path: '/administration/journal', section: 'journal' },
   { tab: 'admin', path: '/administration/retours', section: 'retours' },
+  { tab: 'admin', path: '/administration/lacunes', section: 'lacunes' },
+  { tab: 'admin', path: '/administration/reponses-validees', section: 'reponses' },
+  { tab: 'admin', path: '/administration/contacts', section: 'contacts' },
 ]
 
 // English paths an administrator is likely to guess, and the ones the API itself
@@ -29,6 +32,9 @@ const ALIASES = {
   '/admin/overview': '/administration',
   '/admin/audit': '/administration/journal',
   '/admin/feedback': '/administration/retours',
+  '/admin/gaps': '/administration/lacunes',
+  '/admin/validated-answers': '/administration/reponses-validees',
+  '/admin/contacts': '/administration/contacts',
   '/admin/users': '/utilisateurs',
   '/chat': '/assistant',
   '/users': '/utilisateurs',

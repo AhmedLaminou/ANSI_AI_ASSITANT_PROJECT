@@ -8,12 +8,16 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
+import { Contacts, Gaps, ValidatedAnswers } from './Knowledge.jsx'
 import { Icon, formatDate, request } from './shared.jsx'
 
 const SECTIONS = [
   { id: 'supervision', label: 'Supervision', icon: 'grid' },
+  { id: 'lacunes', label: 'Lacunes du corpus', icon: 'search' },
+  { id: 'reponses', label: 'Réponses validées', icon: 'check' },
+  { id: 'contacts', label: 'Contacts', icon: 'users' },
   { id: 'journal', label: "Journal d'audit", icon: 'shield' },
-  { id: 'retours', label: 'Retours sur les réponses', icon: 'chat' },
+  { id: 'retours', label: 'Retours', icon: 'chat' },
 ]
 
 const AUDIT_FILTERS = [
@@ -77,6 +81,42 @@ function readSignals(overview) {
       text: `${overview.documents.expired} document(s) dépassent leur date de validité. Ils restent consultables et sont signalés comme périmés dans les réponses.`,
     })
   }
+  if (overview.gaps?.unanswered > 0) {
+    signals.push({
+      tone: 'info',
+      text: `${overview.gaps.unanswered} question(s) sans réponse à examiner dans « Lacunes du corpus » : autant de documents manquants ou de mots que le corpus n'emploie pas.`,
+    })
+  }
+  if (overview.reviews?.overdue > 0) {
+    signals.push({
+      tone: 'warn',
+      text: `${overview.reviews.overdue} document(s) ont dépassé leur date de révision. Leur responsable doit confirmer qu'ils sont toujours exacts.`,
+    })
+  }
+  if (overview.reviews?.without_owner > 0) {
+    signals.push({
+      tone: 'warn',
+      text: `${overview.reviews.without_owner} document(s) sans responsable. Un document dont personne ne répond n'est jamais révisé.`,
+    })
+  }
+  if (overview.contacts_missing?.length) {
+    signals.push({
+      tone: 'info',
+      text: `Aucun contact pour : ${overview.contacts_missing.join(', ')}. Sans contact, un refus de l'assistant ne renvoie vers personne.`,
+    })
+  }
+  if (overview.accounts.without_email > 0) {
+    signals.push({
+      tone: 'info',
+      text: `${overview.accounts.without_email} compte(s) actif(s) sans adresse professionnelle : ils se connectent encore avec leur identifiant.`,
+    })
+  }
+  if (overview.accounts.password_resets_pending > 0) {
+    signals.push({
+      tone: 'warn',
+      text: `${overview.accounts.password_resets_pending} agent(s) attendent un mot de passe provisoire (écran Utilisateurs).`,
+    })
+  }
   if (overview.model.retention_days === 0) {
     signals.push({
       tone: 'warn',
@@ -87,6 +127,21 @@ function readSignals(overview) {
     signals.push({ tone: 'ok', text: 'Aucun point d’attention détecté sur le périmètre supervisé.' })
   }
   return signals
+}
+
+export function ReviewBadge({ status, due }) {
+  const label = {
+    overdue: 'dépassée',
+    due_soon: 'bientôt',
+    ok: 'à jour',
+    none: 'non planifiée',
+  }[status] ?? status
+  return (
+    <span className={`review-badge ${status}`}>
+      {label}
+      {due && ` · ${formatDate(due, false)}`}
+    </span>
+  )
 }
 
 function Supervision({ overview }) {
@@ -117,7 +172,7 @@ function Supervision({ overview }) {
         ))}
       </div>
 
-      <h3>Répartition par service</h3>
+      <h2 className="block-title section-title">Répartition par service</h2>
       <p className="muted">
         Le cloisonnement se lit ici : un service sans document n'a rien à offrir à ses agents,
         un service sans compte n'a personne pour l'interroger.
@@ -150,9 +205,46 @@ function Supervision({ overview }) {
         </table>
       </div>
 
+      {overview.reviews?.items.length > 0 && (
+        <>
+          <h2 className="block-title section-title">Documents à réviser</h2>
+          <p className="muted">
+            Date de révision dépassée ou proche, responsable absent ou inactif. Distinct de la date
+            de validité : la révision est le moment où quelqu'un vérifie que le texte est encore vrai.
+          </p>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Document</th>
+                  <th>Service</th>
+                  <th>Responsable</th>
+                  <th>Révision</th>
+                </tr>
+              </thead>
+              <tbody>
+                {overview.reviews.items.map((item) => (
+                  <tr key={item.id} className={item.review_status === 'overdue' ? 'row-warn' : ''}>
+                    <td><strong>{item.title}</strong></td>
+                    <td>{item.department_label}</td>
+                    <td>
+                      {item.owner ?? <span className="warn-text">aucun</span>}
+                      {item.owner_inactive && <span className="warn-text"> (compte inactif)</span>}
+                    </td>
+                    <td className="nowrap">
+                      <ReviewBadge status={item.review_status} due={item.review_due} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
       <div className="admin-columns">
         <div>
-          <h3>Activité des sept derniers jours</h3>
+          <h2 className="block-title section-title">Activité des sept derniers jours</h2>
           {activity.length ? (
             <ul className="stat-list">
               {activity.map(([kind, count]) => (
@@ -167,7 +259,7 @@ function Supervision({ overview }) {
           )}
         </div>
         <div>
-          <h3>Configuration en vigueur</h3>
+          <h2 className="block-title section-title">Configuration en vigueur</h2>
           <ul className="stat-list">
             <li><span>Modèle de conversation</span><strong>{overview.model.chat}</strong></li>
             <li><span>Modèle d'embeddings</span><strong>{overview.model.embedding}</strong></li>
@@ -180,7 +272,7 @@ function Supervision({ overview }) {
               </strong>
             </li>
           </ul>
-          <h3>Comptes par rôle</h3>
+          <h2 className="block-title section-title">Comptes par rôle</h2>
           <ul className="stat-list">
             {Object.entries(overview.accounts.by_role).map(([role, count]) => (
               <li key={role}><span>{role}</span><strong>{count}</strong></li>
@@ -380,6 +472,9 @@ export default function Administration({ user, section, onSection, onToast }) {
         {section === 'supervision' && <Supervision overview={overview} />}
         {section === 'journal' && <Journal onToast={onToast} />}
         {section === 'retours' && <Retours onToast={onToast} />}
+        {section === 'lacunes' && <Gaps onToast={onToast} />}
+        {section === 'reponses' && <ValidatedAnswers onToast={onToast} />}
+        {section === 'contacts' && <Contacts onToast={onToast} />}
       </div>
     </section>
   )

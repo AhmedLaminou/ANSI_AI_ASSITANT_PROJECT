@@ -6,7 +6,8 @@
 
 import { useEffect, useState } from 'react'
 
-import { Icon, formatDate, request } from './shared.jsx'
+import { ReviewBadge } from './Administration.jsx'
+import { Field, Icon, formatDate, request } from './shared.jsx'
 
 function PasswordCard({ onToast }) {
   const [current, setCurrent] = useState('')
@@ -53,12 +54,10 @@ function PasswordCard({ onToast }) {
         <input type="password" value={current} autoComplete="current-password"
                onChange={(event) => setCurrent(event.target.value)} required />
       </label>
-      <label>
-        Nouveau mot de passe
+      <Field label="Nouveau mot de passe" hint="12 caractères minimum.">
         <input type="password" value={next} autoComplete="new-password" minLength={12}
                onChange={(event) => setNext(event.target.value)} required />
-        <span className="field-hint">12 caractères minimum.</span>
-      </label>
+      </Field>
       <label>
         Confirmer le nouveau mot de passe
         <input type="password" value={confirmation} autoComplete="new-password" minLength={12}
@@ -104,11 +103,62 @@ function SessionsCard({ onToast }) {
   )
 }
 
+function ContactsCard({ contacts }) {
+  return (
+    <div className="panel-card">
+      <h3>Qui contacter</h3>
+      {contacts.length ? (
+        <ul className="contact-cards">
+          {contacts.map((contact) => (
+            <li key={contact.department}>
+              <span className="overline">{contact.department_label}</span>
+              <strong>{contact.name}</strong>
+              {contact.email && <a href={`mailto:${contact.email}`}>{contact.email}</a>}
+              {contact.phone && <span>{contact.phone}</span>}
+              {contact.note && <span className="muted">{contact.note}</span>}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted">Aucun contact n'a encore été désigné pour votre service.</p>
+      )}
+      <p className="field-hint">
+        C'est aussi vers eux que l'assistant vous oriente quand il ne trouve pas la réponse.
+      </p>
+    </div>
+  )
+}
+
+function OwnedDocuments({ documents }) {
+  if (!documents.length) return null
+  return (
+    <div className="panel-card">
+      <h3>Documents dont je suis responsable</h3>
+      <p className="muted">
+        C'est à vous qu'il revient de confirmer qu'ils sont toujours exacts à leur date de révision
+        — ou de les remplacer.
+      </p>
+      <ul className="stat-list">
+        {documents.map((document) => (
+          <li key={document.id}>
+            <span>
+              <strong>{document.title}</strong> · {document.department_label}
+            </span>
+            <ReviewBadge status={document.review_status} due={document.review_due} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 export default function Profile({ user, onToast }) {
   const [profile, setProfile] = useState(null)
+  const [contacts, setContacts] = useState([])
 
   useEffect(() => {
     request('/auth/profile').then(setProfile).catch((error) => onToast(error.message, 'error'))
+    request('/contacts').then(setContacts).catch(() => setContacts([]))
   }, [onToast])
 
   const initials = user.username.slice(0, 2).toUpperCase()
@@ -189,6 +239,8 @@ export default function Profile({ user, onToast }) {
               </p>
             </div>
             <div className="profile-side">
+              <ContactsCard contacts={contacts} />
+              <OwnedDocuments documents={profile.owned_documents ?? []} />
               <PasswordCard onToast={onToast} />
               <SessionsCard onToast={onToast} />
             </div>

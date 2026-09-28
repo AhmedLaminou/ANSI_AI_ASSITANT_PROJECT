@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
-import Administration from './Administration.jsx'
+import Administration, { ReviewBadge } from './Administration.jsx'
+import { ValidatedAnswerEditor } from './Knowledge.jsx'
 import { ForcedPasswordChange, Login } from './Login.jsx'
 import Profile from './Profile.jsx'
 import Users from './Users.jsx'
@@ -46,7 +47,7 @@ function useTheme() {
   return [theme, () => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))]
 }
 
-function useToasts() {
+export function useToasts() {
   const [toasts, setToasts] = useState([])
   // Memoised on purpose: `push` is passed down as `onToast` and read by effect
   // dependency lists. A fresh function on every render made those effects refire,
@@ -201,13 +202,19 @@ function ShortcutHelp({ open, onClose }) {
   ]
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="shortcut-modal" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+      <section
+        className="shortcut-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shortcuts-title"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <header>
           <div>
             <p className="overline">RACCOURCIS CLAVIER</p>
-            <h2>Navigation rapide</h2>
+            <h2 id="shortcuts-title">Navigation rapide</h2>
           </div>
-          <button className="modal-close" onClick={onClose}>
+          <button className="modal-close" onClick={onClose} aria-label="Fermer l'aide" autoFocus>
             <Icon name="close" />
           </button>
         </header>
@@ -348,10 +355,14 @@ function ConversationRow({ conversation, isActive, onSelect, onRename, onDelete 
         </button>
       )}
       <div className="conversation-actions">
-        <button title="Renommer" onClick={startEditing}>
+        <button title="Renommer" aria-label={`Renommer la conversation « ${conversation.title} »`} onClick={startEditing}>
           <Icon name="pencil" />
         </button>
-        <button title="Supprimer cette conversation" onClick={(event) => { event.stopPropagation(); onDelete(conversation.id) }}>
+        <button
+          title="Supprimer cette conversation"
+          aria-label={`Supprimer la conversation « ${conversation.title} »`}
+          onClick={(event) => { event.stopPropagation(); onDelete(conversation.id) }}
+        >
           <Icon name="close" />
         </button>
       </div>
@@ -359,7 +370,17 @@ function ConversationRow({ conversation, isActive, onSelect, onRename, onDelete 
   )
 }
 
+/** The answer text as it should be validated: without the referral appended to a
+ * refusal, and without a previous validation's signature. */
+function answerForValidation(content) {
+  return content
+    .split('\n\nPour cette question, vous pouvez vous adresser à')[0]
+    .split('\n\n*Réponse validée par')[0]
+    .trim()
+}
+
 function ChatView({
+  user,
   documents,
   system,
   conversations,
@@ -379,6 +400,7 @@ function ChatView({
   const [mode, setMode] = useState('assistant')
   const [results, setResults] = useState(null)
   const [rated, setRated] = useState({})
+  const [publishing, setPublishing] = useState(null)
   const ready = system?.chat_model_ready && system?.embedding_model_ready
 
   async function submit(event) {
@@ -434,6 +456,14 @@ function ChatView({
 
   return (
     <section className="assistant-workspace">
+      {publishing && (
+        <ValidatedAnswerEditor
+          initial={publishing}
+          onClose={() => setPublishing(null)}
+          onSaved={() => undefined}
+          onToast={onToast}
+        />
+      )}
       <aside className="conversation-sidebar">
         <button className="new-conversation" onClick={onNewConversation}>
           <Icon name="plus" /> Nouvelle conversation
@@ -519,9 +549,28 @@ function ChatView({
                   <div className="message-head">
                     <p className="message-label">{entry.role === 'user' ? 'VOUS' : 'ASSISTANT ANSI'}</p>
                     {entry.role === 'assistant' && (
-                      <button className="copy-button" title="Copier la réponse" onClick={() => copyMessage(entry.content)}>
-                        <Icon name="copy" />
-                      </button>
+                      <div className="message-tools">
+                        {user.role === 'admin' && entry.id && (
+                          <button
+                            className="text-button"
+                            title="Servir cette réponse telle quelle, sans le modèle, aux questions qui ont le même sens"
+                            onClick={() => setPublishing({
+                              question: messages[entryIndex - 1]?.role === 'user' ? messages[entryIndex - 1].content : '',
+                              answer: answerForValidation(entry.content),
+                            })}
+                          >
+                            <Icon name="check" /> Publier comme réponse validée
+                          </button>
+                        )}
+                        <button
+                          className="copy-button"
+                          title="Copier la réponse"
+                          aria-label="Copier la réponse"
+                          onClick={() => copyMessage(entry.content)}
+                        >
+                          <Icon name="copy" />
+                        </button>
+                      </div>
                     )}
                   </div>
                   <div className="message-body">{renderRichText(entry.content)}</div>
@@ -554,8 +603,15 @@ function ChatView({
                 </article>
               ))
             )}
+            <p className="visually-hidden" role="status" aria-live="polite">
+              {streaming
+                ? streaming.phase === 'thinking'
+                  ? "L'assistant recherche dans les documents."
+                  : "L'assistant rédige sa réponse."
+                : ''}
+            </p>
             {streaming && (
-              <article className="message assistant streaming">
+              <article className="message assistant streaming" aria-busy="true">
                 <div className="message-head">
                   <p className="message-label">ASSISTANT ANSI</p>
                 </div>
@@ -662,14 +718,21 @@ function DocumentPreview({ preview, onClose }) {
   if (!preview) return null
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="preview-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+      <section
+        className="preview-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="preview-title"
+        onMouseDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.key === 'Escape' && onClose()}
+      >
         <header>
           <div>
             <p className="overline">APERÇU AUTORISÉ</p>
-            <h2>{preview.document.title}</h2>
+            <h2 id="preview-title">{preview.document.title}</h2>
             <p>{preview.document.filename}</p>
           </div>
-          <button className="modal-close" onClick={onClose}>
+          <button className="modal-close" onClick={onClose} aria-label="Fermer l'aperçu" autoFocus>
             <Icon name="close" />
           </button>
         </header>
@@ -691,6 +754,18 @@ function DocumentPreview({ preview, onClose }) {
  * le changer était de supprimer et réimporter — ce qui perd l'historique des
  * versions et coûte une réindexation complète. */
 function ScopeEditor({ document, onClose, onSaved, onToast }) {
+  const [owners, setOwners] = useState([])
+  const [ownerId, setOwnerId] = useState(document.owner_id ?? '')
+  const [reviewDue, setReviewDue] = useState(document.review_due ? document.review_due.slice(0, 10) : '')
+
+  useEffect(() => {
+    // A reader cannot answer for a document: the owner must be able to replace it.
+    request('/admin/users')
+      .then((accounts) => setOwners(accounts.filter(
+        (account) => account.is_active && ['admin', 'document_manager'].includes(account.role),
+      )))
+      .catch(() => setOwners([]))
+  }, [])
   const [classification, setClassification] = useState(document.classification)
   const [department, setDepartment] = useState(document.department)
   const [roles, setRoles] = useState(document.allowed_roles)
@@ -717,6 +792,8 @@ function ScopeEditor({ document, onClose, onSaved, onToast }) {
           classification,
           department,
           allowed_roles: roles.join(','),
+          review_due: reviewDue,
+          ...(ownerId ? { owner_id: Number(ownerId) } : {}),
         }),
       })
       onToast(`Périmètre de « ${title} » mis à jour.`, 'success')
@@ -731,9 +808,17 @@ function ScopeEditor({ document, onClose, onSaved, onToast }) {
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <form className="modal scope-modal" onClick={(event) => event.stopPropagation()} onSubmit={submit}>
+      <div
+        className="modal scope-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="scope-title"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.key === 'Escape' && onClose()}
+      >
+      <form className="modal-form" onSubmit={submit}>
         <div className="modal-head">
-          <h3>Modifier le périmètre</h3>
+          <h2 id="scope-title" className="block-title">Modifier le périmètre</h2>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Fermer">
             <Icon name="close" />
           </button>
@@ -744,7 +829,7 @@ function ScopeEditor({ document, onClose, onSaved, onToast }) {
         </p>
         <label>
           Titre
-          <input value={title} onChange={(event) => setTitle(event.target.value)} required />
+          <input value={title} onChange={(event) => setTitle(event.target.value)} required autoFocus />
         </label>
         <label>
           Service
@@ -762,6 +847,23 @@ function ScopeEditor({ document, onClose, onSaved, onToast }) {
           <span className="field-hint">
             Indicative seulement : ce sont les rôles ci-dessous qui filtrent réellement.
           </span>
+        </label>
+        <label>
+          Responsable
+          <select value={ownerId} onChange={(event) => setOwnerId(event.target.value)}>
+            {!document.owner_id && <option value="">Aucun</option>}
+            {owners.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.username} ({account.role})
+              </option>
+            ))}
+          </select>
+          <span className="field-hint">C'est à lui que la révision est demandée.</span>
+        </label>
+        <label>
+          À réviser le
+          <input type="date" value={reviewDue} onChange={(event) => setReviewDue(event.target.value)} />
+          <span className="field-hint">Vide : aucune révision planifiée.</span>
         </label>
         <fieldset className="role-grid">
           <legend>Rôles autorisés</legend>
@@ -784,12 +886,19 @@ function ScopeEditor({ document, onClose, onSaved, onToast }) {
           <button className="primary" disabled={busy}>{busy ? 'Enregistrement…' : 'Enregistrer'}</button>
         </div>
       </form>
+      </div>
     </div>
   )
 }
 
-function DocumentsView({ user, documents, onRefresh, onToast }) {
-  const [file, setFile] = useState(null)
+export function DocumentsView({ user, documents, onRefresh, onToast }) {
+  // Several files go through the batch endpoint, each titled after its filename; a
+  // single file keeps the title field. Importing a corpus one form at a time does not
+  // happen, so the batch path is the one that matters for real use.
+  const [files, setFiles] = useState([])
+  const file = files.length === 1 ? files[0] : null
+  const [reviewDue, setReviewDue] = useState('')
+  const [batchReport, setBatchReport] = useState(null)
   const [title, setTitle] = useState('')
   const [classification, setClassification] = useState('interne')
   const [department, setDepartment] = useState('transverse')
@@ -831,24 +940,35 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
 
   async function submit(event) {
     event.preventDefault()
-    if (!file) return setError('Sélectionnez un document.')
+    if (!files.length) return setError('Sélectionnez au moins un document.')
     if (!allowedRoles.length) return setError('Choisissez au moins un rôle autorisé.')
     setBusy(true)
     setError('')
+    setBatchReport(null)
     const form = new FormData()
-    form.append('file', file)
-    form.append('title', title || file.name.replace(/\.[^.]+$/, ''))
     form.append('classification', classification)
     form.append('allowed_roles', allowedRoles.join(','))
     form.append('valid_until', validUntil)
+    form.append('review_due', reviewDue)
     form.append('department', department)
     try {
-      const uploaded = await request('/documents/upload', { method: 'POST', body: form })
-      setFile(null)
+      if (file) {
+        form.append('file', file)
+        form.append('title', title || file.name.replace(/\.[^.]+$/, ''))
+        const uploaded = await request('/documents/upload', { method: 'POST', body: form })
+        onToast(`« ${uploaded.title} » importé et indexé (${uploaded.chunks_indexed} extraits).`, 'success')
+      } else {
+        files.forEach((item) => form.append('files', item))
+        const report = await request('/documents/upload-batch', { method: 'POST', body: form })
+        setBatchReport(report)
+        onToast(`${report.imported} document(s) importé(s), ${report.failed} échec(s).`,
+                report.failed ? 'error' : 'success')
+      }
+      setFiles([])
       setTitle('')
       setValidUntil('')
+      setReviewDue('')
       await onRefresh()
-      onToast(`« ${uploaded.title} » importé et indexé (${uploaded.chunks_indexed} extraits).`, 'success')
     } catch (requestError) {
       setError(requestError.message)
     } finally {
@@ -891,7 +1011,7 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
         <form className="upload-card" onSubmit={submit}>
           <div className="upload-header">
             <div>
-              <h3>Importer un document</h3>
+              <h2 className="block-title">Importer un document</h2>
               <p>
                 Le texte est conservé localement, découpé puis indexé par <strong>embeddinggemma</strong>.
               </p>
@@ -901,7 +1021,12 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
           <div className="form-grid">
             <label>
               Titre du document
-              <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Ex. Rapport trimestriel" />
+              <input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder={files.length > 1 ? 'Chaque document prend le nom de son fichier' : 'Ex. Rapport trimestriel'}
+                disabled={files.length > 1}
+              />
             </label>
             <label>
               Service concerné
@@ -922,13 +1047,24 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
               </select>
             </label>
             <label className="file-input">
-              Fichier
-              <input type="file" accept=".pdf,.docx,.txt,.md" onChange={(event) => setFile(event.target.files[0] ?? null)} />
-              {file ? <span>{file.name}</span> : <span>Choisir un fichier</span>}
+              Fichier(s)
+              <input
+                type="file"
+                multiple
+                accept=".pdf,.docx,.txt,.md"
+                onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
+              />
+              {files.length === 0 && <span>Choisir un ou plusieurs fichiers</span>}
+              {files.length === 1 && <span>{files[0].name}</span>}
+              {files.length > 1 && <span>{files.length} fichiers sélectionnés</span>}
             </label>
             <label>
               Valide jusqu'au <span className="field-hint">(facultatif)</span>
               <input type="date" value={validUntil} onChange={(event) => setValidUntil(event.target.value)} />
+            </label>
+            <label>
+              À réviser le <span className="field-hint">(par défaut : dans douze mois)</span>
+              <input type="date" value={reviewDue} onChange={(event) => setReviewDue(event.target.value)} />
             </label>
           </div>
           <fieldset>
@@ -940,10 +1076,34 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
               </label>
             ))}
           </fieldset>
-          {error && <p className="error">{error}</p>}
+          <p className="field-hint">
+            Vous devenez responsable des documents importés : c'est à vous que la révision sera
+            demandée. Pour un dossier entier, l'import depuis le serveur (app.import_folder) est plus adapté.
+          </p>
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
           <button className="primary" disabled={busy}>
-            <Icon name="upload" /> {busy ? 'Indexation locale…' : 'Importer et indexer'}
+            <Icon name="upload" />{' '}
+            {busy
+              ? 'Indexation locale…'
+              : files.length > 1
+                ? `Importer ${files.length} documents`
+                : 'Importer et indexer'}
           </button>
+          {batchReport && (
+            <ul className="batch-report" aria-label="Résultat de l'import">
+              {batchReport.results.map((row) => (
+                <li key={row.filename} className={row.status}>
+                  <Icon name={row.status === 'ok' ? 'check' : 'close'} />
+                  <strong>{row.filename}</strong>
+                  <span>{row.status === 'ok' ? `importé${row.version > 1 ? ` (version ${row.version})` : ''}` : row.detail}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </form>
       )}
       <div className="document-toolbar">
@@ -951,7 +1111,7 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
           <Icon name="search" />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Rechercher un titre ou fichier…" />
         </div>
-        <select value={filter} onChange={(event) => setFilter(event.target.value)}>
+        <select value={filter} onChange={(event) => setFilter(event.target.value)} aria-label="Filtrer par classification">
           <option value="all">Toutes classifications</option>
           {CLASSIFICATIONS.map((value) => (
             <option key={value} value={value}>
@@ -959,7 +1119,7 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
             </option>
           ))}
         </select>
-        <select value={departmentFilter} onChange={(event) => setDepartmentFilter(event.target.value)}>
+        <select value={departmentFilter} onChange={(event) => setDepartmentFilter(event.target.value)} aria-label="Filtrer par service">
           <option value="all">Tous les services</option>
           {DOCUMENT_DEPARTMENTS.map((item) => (
             <option key={item.value} value={item.value}>
@@ -979,6 +1139,7 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
           Versions remplacées
         </label>
       </div>
+      <h2 className="visually-hidden">Liste des documents</h2>
       <div className="document-list">
         {filteredDocuments.length === 0 ? (
           <div className="empty-state compact">
@@ -1008,6 +1169,14 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
                 <p>{document.filename}</p>
                 <div className="tags">
                   <span className={`tag-department ${document.department}`}>{document.department_label}</span>
+                  {canManage && document.review_status !== 'ok' && (
+                    <ReviewBadge status={document.review_status} due={document.review_due} />
+                  )}
+                  {canManage && (
+                    <span className={document.owner ? '' : 'tag-department none'}>
+                      {document.owner ? `responsable : ${document.owner}` : 'sans responsable'}
+                    </span>
+                  )}
                   <span className={`tag-classification ${document.classification}`}>{document.classification}</span>
                   {document.allowed_roles.map((role) => (
                     <span key={role}>{role}</span>
@@ -1022,7 +1191,12 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
                   <button className="text-button" onClick={() => setEditing(document)}>
                     <Icon name="pencil" /> Périmètre
                   </button>
-                  <button className="icon-button" title="Supprimer" onClick={() => removeDocument(document.id, document.title)}>
+                  <button
+                    className="icon-button"
+                    title="Supprimer"
+                    aria-label={`Supprimer le document « ${document.title} »`}
+                    onClick={() => removeDocument(document.id, document.title)}
+                  >
                     <Icon name="trash" />
                   </button>
                 </>
@@ -1226,7 +1400,8 @@ function App() {
 
   return (
     <main className="app-shell">
-      <aside className="main-sidebar">
+      <a className="skip-link" href="#contenu">Aller au contenu</a>
+      <aside className="main-sidebar" aria-label="Navigation principale">
         <div className="side-brand">
           <div className="brand-mark">A</div>
           <div>
@@ -1239,6 +1414,7 @@ function App() {
             <button
               key={item.id}
               className={tab === item.id ? 'active' : ''}
+              aria-current={tab === item.id ? 'page' : undefined}
               onClick={() => navigate(item.id)}
               title={`${item.label} (Alt+${index + 1})`}
             >
@@ -1275,11 +1451,12 @@ function App() {
           </button>
         </div>
       </aside>
-      <section className="main-content">
+      <section className="main-content" id="contenu" tabIndex={-1}>
         {loadError && <div className="notice">{loadError}</div>}
         {tab === 'overview' && <Overview documents={documents} system={system} user={user} onNavigate={setTab} />}
         {tab === 'chat' && (
           <ChatView
+            user={user}
             documents={documents}
             system={system}
             conversations={conversations}

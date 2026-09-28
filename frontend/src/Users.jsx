@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
-import { DEPARTMENTS, Icon, ROLES, formatDate, request } from './shared.jsx'
+import { DEPARTMENTS, Field, Icon, ROLES, formatDate, request } from './shared.jsx'
 
 function RegistrationRow({ entry, onDecide }) {
   const [department, setDepartment] = useState(entry.requested_department ?? 'technique')
@@ -367,7 +367,7 @@ export default function Users({ user, onToast }) {
 
       <div className="admin-grid">
         <form className="upload-card" onSubmit={create}>
-          <h3>Créer un compte</h3>
+          <h2 className="block-title">Créer un compte</h2>
           <label>
             Adresse professionnelle
             <input
@@ -378,8 +378,7 @@ export default function Users({ user, onToast }) {
               required
             />
           </label>
-          <label>
-            Mot de passe provisoire
+          <Field label="Mot de passe provisoire" hint="L'agent devra le remplacer à sa première connexion.">
             <input
               type="password"
               value={password}
@@ -388,8 +387,7 @@ export default function Users({ user, onToast }) {
               autoComplete="new-password"
               required
             />
-            <span className="field-hint">L'agent devra le remplacer à sa première connexion.</span>
-          </label>
+          </Field>
           <label>
             Rôle
             <select value={role} onChange={(event) => setRole(event.target.value)}>

@@ -5,6 +5,8 @@
  * been a cycle. Everything here is shared downwards only — nothing in this file
  * imports a screen. */
 
+import { cloneElement, useId } from 'react'
+
 export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 export const ROLES = ['admin', 'document_manager', 'user']
@@ -96,4 +98,32 @@ export function formatDate(value, withTime = true) {
   const day = date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })
   if (!withTime) return day
   return `${day} à ${date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`
+}
+
+/** A form field whose input is named by its label alone.
+ *
+ * Wrapping an input in a <label> names it after *all* the label's text, hint
+ * included: a screen reader announced « Adresse professionnelle Les comptes créés
+ * avant l'adresse se connectent… » for a single field. Here the name comes from the
+ * label text only (aria-labelledby, which takes precedence) and the hint becomes the
+ * description (aria-describedby) — read after the name, and only on request. The
+ * markup keeps its <label> wrapper, so the layout does not change. */
+export function Field({ label, hint, children, className }) {
+  const id = useId()
+  const labelId = `${id}-label`
+  const hintId = `${id}-hint`
+  return (
+    <label className={className}>
+      <span id={labelId}>{label}</span>
+      {cloneElement(children, {
+        'aria-labelledby': labelId,
+        'aria-describedby': hint ? hintId : undefined,
+      })}
+      {hint && (
+        <span id={hintId} className="field-hint">
+          {hint}
+        </span>
+      )}
+    </label>
+  )
 }

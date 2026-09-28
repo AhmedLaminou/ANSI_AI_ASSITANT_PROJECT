@@ -10,9 +10,9 @@
  * temporary password by another channel. That password must then be replaced —
  * see ForcedPasswordChange below. */
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 
-import { DEPARTMENTS, Icon, request } from './shared.jsx'
+import { DEPARTMENTS, Field, Icon, request } from './shared.jsx'
 
 const MODES = {
   login: {
@@ -145,8 +145,10 @@ export function Login({ onLogin, theme, onToggleTheme, initialNotice = '' }) {
 
           {mode === 'login' && (
             <>
-              <label>
-                Adresse professionnelle
+              <Field
+                label="Adresse professionnelle"
+                hint="Les comptes créés avant l'adresse se connectent avec leur identifiant, jusqu'à ce qu'un administrateur en enregistre une."
+              >
                 <input
                   value={identifier}
                   onChange={(event) => setIdentifier(event.target.value)}
@@ -157,19 +159,14 @@ export function Login({ onLogin, theme, onToggleTheme, initialNotice = '' }) {
                   placeholder="prenom.nom@ansi.ne"
                   required
                 />
-                <span className="field-hint">
-                  Les comptes créés avant l'adresse se connectent avec leur identifiant, jusqu'à ce
-                  qu'un administrateur en enregistre une.
-                </span>
-              </label>
+              </Field>
               <PasswordField value={password} onChange={setPassword} autoComplete="current-password" />
             </>
           )}
 
           {mode === 'register' && (
             <>
-              <label>
-                Nom et prénom
+              <Field label="Nom et prénom" hint="C'est ce que verra l'administrateur qui traitera votre demande.">
                 <input
                   value={fullName}
                   onChange={(event) => setFullName(event.target.value)}
@@ -179,8 +176,7 @@ export function Login({ onLogin, theme, onToggleTheme, initialNotice = '' }) {
                   placeholder="Amina Souley"
                   required
                 />
-                <span className="field-hint">C'est ce que verra l'administrateur qui traitera votre demande.</span>
-              </label>
+              </Field>
               <EmailField value={email} onChange={setEmail} hint="Elle servira d'identifiant de connexion." />
               <PasswordField
                 value={password}
@@ -252,8 +248,7 @@ export function Login({ onLogin, theme, onToggleTheme, initialNotice = '' }) {
 
 function EmailField({ value, onChange, hint }) {
   return (
-    <label>
-      Adresse professionnelle
+    <Field label="Adresse professionnelle" hint={hint}>
       <input
         type="email"
         value={value}
@@ -263,18 +258,22 @@ function EmailField({ value, onChange, hint }) {
         placeholder="prenom.nom@ansi.ne"
         required
       />
-      {hint && <span className="field-hint">{hint}</span>}
-    </label>
+    </Field>
   )
 }
 
 function PasswordField({ value, onChange, autoComplete, minLength = 8, hint, label = 'Mot de passe' }) {
   const [visible, setVisible] = useState(false)
+  const id = useId()
   return (
     <label>
-      {label}
+      {/* Named by the label text alone: without aria-labelledby the name would also
+          swallow the hint and the show/hide button's own label. */}
+      <span id={`${id}-label`}>{label}</span>
       <span className="password-field">
         <input
+          aria-labelledby={`${id}-label`}
+          aria-describedby={hint ? `${id}-hint` : undefined}
           type={visible ? 'text' : 'password'}
           value={value}
           onChange={(event) => onChange(event.target.value)}
@@ -293,7 +292,11 @@ function PasswordField({ value, onChange, autoComplete, minLength = 8, hint, lab
           <Icon name="eye" />
         </button>
       </span>
-      {hint && <span className="field-hint">{hint}</span>}
+      {hint && (
+        <span id={`${id}-hint`} className="field-hint">
+          {hint}
+        </span>
+      )}
     </label>
   )
 }
