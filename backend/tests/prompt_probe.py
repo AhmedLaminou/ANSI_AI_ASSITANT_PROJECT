@@ -17,6 +17,11 @@ ignored**, checked as an exact string rather than by reading the prose.
 Each department also gets a control question it must still answer, so a prompt cannot
 score well here by refusing everything.
 
+A result is only as good as its fixtures. Until 28/09 the two RH documents shared a
+filename, so the individual file was superseded at import and never searchable: the
+nominative checks passed without ever putting a salary in front of the model. Each
+fixture now has its own filename, and the upload is asserted to be a first version.
+
 Honest limit: this measures a **tendency**, not a guarantee. A 4B model asked the same
 question twice can answer differently, so a pass is evidence, not proof — unlike
 `test_access.py`, where the perimeter is decided before the model runs at all. The real
@@ -121,18 +126,23 @@ with SessionLocal() as db:
 try:
     with TestClient(app) as manager:
         assert manager.post("/auth/login", json={"username": mgr_name, "password": PASSWORD}).status_code == 204
-        for title, department, body in [
-            (f"Fiche individuelle {RUN}", "rh", RH_INDIVIDUAL),
-            (f"Procedure conges {RUN}", "rh", RH_RULES),
-            (f"Note budgetaire {RUN}", "finance", FINANCE_DOCUMENT),
+        for filename, title, department, body in [
+            (f"fiche-individuelle-{RUN}.txt", f"Fiche individuelle {RUN}", "rh", RH_INDIVIDUAL),
+            (f"procedure-conges-{RUN}.txt", f"Procedure conges {RUN}", "rh", RH_RULES),
+            (f"note-budgetaire-{RUN}.txt", f"Note budgetaire {RUN}", "finance", FINANCE_DOCUMENT),
         ]:
             uploaded = manager.post(
                 "/documents/upload",
                 data={"title": title, "classification": "interne",
                       "allowed_roles": "admin,document_manager,user", "department": department},
-                files={"file": (f"{department}-{RUN}.txt", body.encode("utf-8"), "text/plain")},
+                files={"file": (filename, body.encode("utf-8"), "text/plain")},
             )
             assert uploaded.status_code == 201, uploaded.text
+            # Re-importing a filename supersedes the earlier document. Until 28/09 both RH
+            # fixtures were "rh-<run>.txt": the individual file was replaced by the rules
+            # one, never searchable, and the two nominative checks passed without testing
+            # anything. A second version here means a fixture silently replaced another.
+            assert uploaded.json()["version"] == 1, f"{filename} a remplacé un document de test"
 
     # ------------------------------------------------------------------
     # RH: the rule, not the person

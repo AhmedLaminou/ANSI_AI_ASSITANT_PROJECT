@@ -66,6 +66,15 @@ def test_the_dataset_has_documents_and_questions():
     assert DOCUMENTS and QUESTIONS
 
 
+def test_no_two_documents_share_a_filename():
+    """Importing a filename twice makes the second a new version of the first, which
+    stops being searched. A repeated filename here would silently remove a document from
+    the run — and from DOCUMENTS above, a dict, so no other check would notice. It is how
+    the prompt probe's individual HR file went unsearched from 17/09 to 28/09."""
+    filenames = [document["filename"] for document in dataset["documents"]]
+    assert len(filenames) == len(set(filenames))
+
+
 @pytest.mark.parametrize("filename", sorted(DOCUMENTS))
 def test_every_document_declares_a_real_department(filename):
     assert DOCUMENTS[filename].get("department", TRANSVERSE) in DEPARTMENTS | {TRANSVERSE}
