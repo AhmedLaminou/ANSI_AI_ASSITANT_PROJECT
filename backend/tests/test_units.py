@@ -26,9 +26,9 @@ from app.main import (
     enforce_login_rate_limit,
     extract_answer,
     record_failed_login,
-    safe_roles,
     _rate_buckets,
 )
+from app.ingestion import IngestionRejected, safe_roles
 from app.rag import chunk_pages, cosine_similarity, extract_pages, ocr_available, parse_allowed_roles
 
 
@@ -182,13 +182,13 @@ def test_safe_roles_sorts_and_deduplicates():
 
 
 def test_safe_roles_rejects_unknown_role():
-    with pytest.raises(HTTPException) as error:
+    with pytest.raises(IngestionRejected) as error:
         safe_roles("admin,root")
     assert error.value.status_code == 422
 
 
 def test_safe_roles_rejects_empty():
-    with pytest.raises(HTTPException):
+    with pytest.raises(IngestionRejected):
         safe_roles("  ")
 
 

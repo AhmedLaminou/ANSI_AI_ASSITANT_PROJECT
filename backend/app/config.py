@@ -25,6 +25,15 @@ class Settings(BaseSettings):
     # qwen3 emits reasoning before its answer; the stream hides it until </think>.
     ollama_chat_reasoning: bool = True
     document_max_upload_mb: int = 20
+    # Months until a newly imported document is due for review by its owner.
+    # 0 imports documents with no review date at all.
+    document_review_months: int = 12
+    # Documents per batch import through the web interface. The folder importer
+    # run on the server has no such limit.
+    document_batch_max_files: int = 50
+    # Two unanswered questions belong to the same gap above this cosine similarity.
+    # Measured, not guessed: see app/refusals.py. 0.80 would group nothing at all.
+    gap_similarity_threshold: float = 0.50
     conversation_retention_days: int = 0  # 0 disables automatic purging
     chat_rate_limit_per_minute: int = 12
     login_rate_limit_per_minute: int = 5  # failed attempts, per account and per address

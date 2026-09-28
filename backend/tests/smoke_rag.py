@@ -18,6 +18,7 @@ from app.database import (
     DocumentChunk,
     DocumentRecord,
     SessionLocal,
+    UnansweredQuestion,
     User,
     engine,
     initialise_database,
@@ -133,6 +134,15 @@ try:
         reader_login = client.post("/auth/login", json={"username": reader_name, "password": "RotatedPassword-2026"})
         assert reader_login.status_code == 204, reader_login.text
 
+        # The password was chosen by an administrator, so it is temporary: until the
+        # reader picks their own, everything but the password change is closed.
+        gated = client.get("/documents")
+        assert gated.status_code == 403, "an administrator-chosen password gave full access"
+        changed = client.post("/auth/password", json={
+            "current_password": "RotatedPassword-2026", "new_password": "ReaderOwnPassword-2026",
+        })
+        assert changed.status_code == 204, changed.text
+
         # The database may already hold unrelated documents, so assert the real
         # invariant — the reader never sees THIS test's admin-only document —
         # rather than an empty list, which would depend on the environment.
@@ -155,5 +165,7 @@ finally:
                 db.execute(delete(ChatMessage).where(ChatMessage.conversation_id.in_(conversation_ids)))
                 db.execute(delete(Conversation).where(Conversation.id.in_(conversation_ids)))
             db.execute(delete(AuditEvent).where(AuditEvent.actor_id.in_(user_ids)))
+            # Refusals are recorded as gaps; the test's must not reach the real screen.
+            db.execute(delete(UnansweredQuestion).where(UnansweredQuestion.user_id.in_(user_ids)))
             db.execute(delete(User).where(User.id.in_(user_ids)))
         db.commit()

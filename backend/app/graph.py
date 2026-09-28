@@ -79,9 +79,10 @@ class AssistantState(TypedDict, total=False):
     chunks: list[Any]
     best_score: float
     rewritten: bool
-    intent: str  # "social" | "tool" | "documentary"
-    outcome: str  # "answer" | "refuse" | "social" | "tool"
+    intent: str  # "social" | "tool" | "validated" | "documentary"
+    outcome: str  # "answer" | "refuse" | "social" | "tool" | "validated"
     tool_answer: str
+    validated_answer: str
 
 
 def strip_reasoning(text: str) -> str:
@@ -118,9 +119,16 @@ def build_assistant_graph(
     relevance_threshold: float,
     max_attempts: int = 2,
     run_tool: Callable[[str], str | None] | None = None,
+    find_validated: Callable[[str], str | None] | None = None,
 ):
-    """`retrieve` and `run_tool` are injected so the graph stays free of database
-    and ACL concerns: both already apply the caller's permissions."""
+    """`retrieve`, `run_tool` and `find_validated` are injected so the graph stays
+    free of database and ACL concerns: all three already apply the caller's
+    permissions.
+
+    Order of the routes: a greeting, then a question about the system itself (tools
+    read facts from the database), then an answer a person validated, then the
+    documents. Tools come before validated answers because they state facts about
+    the account and the corpus that no curated text should be able to shadow."""
 
     async def retrieve_node(state: AssistantState) -> AssistantState:
         chunks = await retrieve(state["search_question"])
@@ -157,6 +165,10 @@ def build_assistant_graph(
         # from documents. The match is deterministic: the model never chooses.
         if run_tool is not None and find_tool(question) is not None:
             return {"intent": "tool"}
+        if find_validated is not None:
+            answer = find_validated(question)
+            if answer is not None:
+                return {"intent": "validated", "validated_answer": answer}
         return {"intent": "documentary"}
 
     def route_intent(state: AssistantState) -> str:
@@ -165,10 +177,15 @@ def build_assistant_graph(
             return "social"
         if intent == "tool":
             return "tool"
+        if intent == "validated":
+            return "validated"
         return "retrieve"
 
     def social_node(state: AssistantState) -> AssistantState:
         return {"outcome": "social"}
+
+    def validated_node(state: AssistantState) -> AssistantState:
+        return {"outcome": "validated"}
 
     def tool_node(state: AssistantState) -> AssistantState:
         answer = run_tool(state["question"]) if run_tool else None
@@ -184,6 +201,7 @@ def build_assistant_graph(
     graph.add_node("route", route_node)
     graph.add_node("social", social_node)
     graph.add_node("tool", tool_node)
+    graph.add_node("validated", validated_node)
     graph.add_node("retrieve", retrieve_node)
     graph.add_node("grade", grade_node)
     graph.add_node("rewrite", rewrite_node)
@@ -192,9 +210,12 @@ def build_assistant_graph(
 
     graph.add_edge(START, "route")
     graph.add_conditional_edges(
-        "route", route_intent, {"social": "social", "tool": "tool", "retrieve": "retrieve"}
+        "route",
+        route_intent,
+        {"social": "social", "tool": "tool", "validated": "validated", "retrieve": "retrieve"},
     )
     graph.add_edge("social", END)
+    graph.add_edge("validated", END)
     graph.add_conditional_edges("tool", after_tool, {"retrieve": "retrieve", "done": END})
     graph.add_edge("retrieve", "grade")
     graph.add_conditional_edges(

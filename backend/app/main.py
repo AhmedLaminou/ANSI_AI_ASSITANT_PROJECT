@@ -2,7 +2,6 @@ import json
 import logging
 import re
 import time
-import uuid
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -38,7 +37,19 @@ from .access import (
 from .config import get_settings
 from .glossary import expand_for
 from .graph import build_assistant_graph
+from .ingestion import (
+    DocumentMetadata,
+    IngestionRejected,
+    as_utc,
+    ingest,
+    parse_date,
+    review_status,
+    title_from_filename,
+)
+from .knowledge import contact_for, find_validated_answer, is_follow_up, previous_turn, referral_sentence
 from .prompts import assistant_description, system_message
+from .refusals import looks_like_refusal, record_unanswered
+from .routes_knowledge import router as knowledge_router
 from .tools import ROLE_RIGHTS, find_tool
 from .database import (
     AnswerFeedback,
@@ -48,7 +59,9 @@ from .database import (
     DocumentChunk,
     DocumentRecord,
     PasswordResetRequest,
+    ServiceContact,
     SessionLocal,
+    UnansweredQuestion,
     User,
     engine,
     get_db,
@@ -56,13 +69,9 @@ from .database import (
 )
 from .rag import (
     DOCUMENT_STORAGE_DIR,
-    SUPPORTED_EXTENSIONS,
-    DocumentError,
     ModelUnavailableError,
     RagError,
-    chunk_pages,
     embed_texts,
-    extract_pages,
     ocr_available,
     parse_allowed_roles,
     search_similar_chunks,
@@ -112,10 +121,18 @@ def no_match_answer(documents: list[DocumentRecord]) -> str:
 class ChatContext:
     """Either a canned refusal, or the body to send to Ollama."""
 
+    # Despite its name, any answer decided without generation: a refusal, but also a
+    # greeting, a tool result or a validated answer.
     refusal: str | None
     sources: list[dict[str, object]] = field(default_factory=list)
     request_body: dict[str, object] | None = None
     rewritten: bool = False  # the graph had to reformulate the question to find sources
+    # Set when the corpus could not answer, so the question is recorded as a gap.
+    unanswered_reason: str | None = None
+    # The question's own embedding, kept to group gaps without embedding it twice.
+    question_embedding: list[float] | None = None
+    # « Adressez-vous à … », appended whenever the assistant cannot answer.
+    referral: str = ""
 
 
 _rate_buckets: dict[str, deque[float]] = defaultdict(deque)
@@ -227,6 +244,8 @@ class UpdateDocumentRequest(BaseModel):
     allowed_roles: str | None = None
     department: str | None = None
     valid_until: str | None = None  # ISO date, or "" to clear
+    review_due: str | None = None  # ISO date, or "" to clear
+    owner_id: int | None = None
 
 
 class UpdateUserRequest(BaseModel):
@@ -310,8 +329,18 @@ def purge_expired_conversations() -> int:
         if not expired:
             return 0
         identifiers = [conversation.id for conversation in expired]
+        message_ids = db.scalars(
+            select(ChatMessage.id).where(ChatMessage.conversation_id.in_(identifiers))
+        ).all()
+        if message_ids:
+            # Feedback references messages. SQLite does not enforce the foreign key,
+            # so omitting this passed unnoticed in development; PostgreSQL does, and
+            # the first purge in production would have failed.
+            db.execute(delete(AnswerFeedback).where(AnswerFeedback.message_id.in_(message_ids)))
         db.execute(delete(ChatMessage).where(ChatMessage.conversation_id.in_(identifiers)))
         db.execute(delete(Conversation).where(Conversation.id.in_(identifiers)))
+        # Unanswered questions hold question text too: the same retention applies.
+        db.execute(delete(UnansweredQuestion).where(UnansweredQuestion.created_at < cutoff))
         db.commit()
         return len(identifiers)
 
@@ -350,6 +379,7 @@ app.add_middleware(
     allow_headers=["Content-Type"],
     **cors_policy(settings.app_env, settings.frontend_origin),
 )
+app.include_router(knowledge_router)
 
 
 # Field names as an agent would name them, not as the schema spells them.
@@ -432,11 +462,14 @@ def document_summary(document: DocumentRecord) -> dict[str, object]:
         "department_label": department_label(document.department),
         "valid_until": document.valid_until.isoformat() if document.valid_until else None,
         "is_expired": is_expired(document),
+        "owner_id": document.owner_id,
+        "review_due": as_utc(document.review_due).isoformat() if document.review_due else None,
+        "review_status": review_status(document),
     }
 
 
 def is_expired(document: DocumentRecord) -> bool:
-    return bool(document.valid_until and document.valid_until < datetime.now(timezone.utc))
+    return bool(document.valid_until and as_utc(document.valid_until) < datetime.now(timezone.utc))
 
 
 def parse_valid_until(raw: str) -> datetime | None:
@@ -481,24 +514,6 @@ def get_owned_conversation(db: Session, conversation_id: int, user: User) -> Con
     if not conversation or conversation.user_id != user.id:
         raise HTTPException(status_code=404, detail="Conversation introuvable")
     return conversation
-
-
-def safe_roles(raw_roles: str) -> str:
-    requested = {role.strip() for role in raw_roles.split(",") if role.strip()}
-    if not requested or not requested.issubset(ROLES):
-        raise HTTPException(status_code=422, detail="Rôles documentaires invalides")
-    return ",".join(sorted(requested))
-
-
-def safe_department(raw: str) -> str:
-    """A department is chosen from a closed set, never free text from the client."""
-    candidate = (raw or TRANSVERSE).strip().lower()
-    if candidate not in DOCUMENT_DEPARTMENTS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Département invalide. Valeurs acceptées : {', '.join(sorted(DOCUMENT_DEPARTMENTS))}.",
-        )
-    return candidate
 
 
 def model_is_available(model: str, installed_models: list[str]) -> bool:
@@ -624,9 +639,21 @@ def my_profile(user: User = Depends(get_current_user), db: Session = Depends(get
     ).first()
 
     unreachable = sorted(DEPARTMENTS - {user.department or ""}) if user.role != "admin" else []
+    # Being responsible for a document is a duty with a date on it: shown here so the
+    # owner sees it without waiting for an administrator to remind them.
+    owned = db.scalars(
+        select(DocumentRecord)
+        .where(DocumentRecord.owner_id == user.id)
+        .where(DocumentRecord.is_current.is_(True))
+        .order_by(DocumentRecord.review_due)
+    ).all()
     return {
         "account": account_summary(user),
         "rights": list(ROLE_RIGHTS.get(user.role, ROLE_RIGHTS["user"])),
+        "owned_documents": [
+            {key: summary[key] for key in ("id", "title", "department_label", "review_due", "review_status")}
+            for summary in (document_summary(document) for document in owned)
+        ],
         "readable": {
             "total": len(readable),
             "by_department": {department_label(name): count for name, count in sorted(by_department.items())},
@@ -772,11 +799,28 @@ def update_document(
         document.title = payload.title.strip() or document.title
     if payload.valid_until is not None:
         document.valid_until = parse_valid_until(payload.valid_until)
+    if payload.review_due is not None:
+        try:
+            document.review_due = parse_date(payload.review_due, "Date de révision")
+        except IngestionRejected as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    if payload.owner_id is not None:
+        owner = db.get(User, payload.owner_id)
+        if owner is None or owner.status != "active":
+            raise HTTPException(status_code=422, detail="Le responsable doit être un compte actif.")
+        # A reader cannot answer for a document: responsibility means being able to
+        # replace it, so the owner must be able to import.
+        if owner.role not in {"admin", "document_manager"}:
+            raise HTTPException(
+                status_code=422,
+                detail="Le responsable doit pouvoir importer des documents (rôle admin ou document_manager).",
+            )
+        document.owner_id = owner.id
 
     db.add(AuditEvent(actor_id=user.id, document_id=document.id, event_type="document_scope_updated"))
     db.commit()
     db.refresh(document)
-    return document_summary(document)
+    return with_owner(document, owner_names(db, [document]))
 
 
 @app.get("/documents")
@@ -788,8 +832,9 @@ def list_documents(
     query = select(DocumentRecord).order_by(DocumentRecord.created_at.desc())
     if not include_superseded:
         query = query.where(DocumentRecord.is_current.is_(True))
-    documents = db.scalars(query).all()
-    return [document_summary(document) for document in documents if can_access_document(user, document)]
+    documents = [document for document in db.scalars(query).all() if can_access_document(user, document)]
+    names = owner_names(db, documents)
+    return [with_owner(document, names) for document in documents]
 
 
 @app.get("/documents/{document_id}/preview")
@@ -808,6 +853,37 @@ def preview_document(
     }
 
 
+def owner_names(db: Session, documents: list[DocumentRecord]) -> dict[int, str]:
+    owner_ids = {document.owner_id for document in documents if document.owner_id}
+    if not owner_ids:
+        return {}
+    return {
+        account.id: account.username
+        for account in db.scalars(select(User).where(User.id.in_(owner_ids))).all()
+    }
+
+
+def with_owner(document: DocumentRecord, names: dict[int, str]) -> dict[str, object]:
+    summary = document_summary(document)
+    summary["owner"] = names.get(document.owner_id) if document.owner_id else None
+    return summary
+
+
+def metadata_from_form(
+    title: str, classification: str, allowed_roles: str, department: str,
+    valid_until: str, review_due: str, owner_id: int | None,
+) -> DocumentMetadata:
+    return DocumentMetadata(
+        title=title,
+        classification=classification,
+        allowed_roles=allowed_roles,
+        department=department,
+        valid_until=parse_date(valid_until, "Date de validité"),
+        review_due=parse_date(review_due, "Date de révision"),
+        owner_id=owner_id,
+    )
+
+
 @app.post("/documents/upload", status_code=status.HTTP_201_CREATED)
 async def upload_document(
     file: UploadFile = File(...),
@@ -816,90 +892,81 @@ async def upload_document(
     allowed_roles: str = Form(DEFAULT_ALLOWED_ROLES),
     valid_until: str = Form(""),
     department: str = Form(TRANSVERSE),
+    review_due: str = Form(""),
+    owner_id: int | None = Form(None),
     user: User = Depends(require_roles("admin", "document_manager")),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
-    original_filename = Path(file.filename or "").name
-    extension = Path(original_filename).suffix.lower()
-    if not original_filename or extension not in SUPPORTED_EXTENSIONS:
-        raise HTTPException(status_code=415, detail="Formats acceptés : PDF, DOCX, TXT et Markdown")
-
-    content = await file.read()
-    max_bytes = settings.document_max_upload_mb * 1024 * 1024
-    if not content:
-        raise HTTPException(status_code=422, detail="Le document est vide")
-    if len(content) > max_bytes:
-        raise HTTPException(status_code=413, detail=f"Document trop volumineux (maximum {settings.document_max_upload_mb} Mo)")
-
     try:
-        pages = extract_pages(original_filename, content)
-        chunks = chunk_pages(pages)
-        if not chunks:
-            extracted = sum(len(text.strip()) for _, text in pages)
-            raise DocumentError(
-                f"Aucun texte exploitable trouvé ({len(pages)} page(s) lue(s), {extracted} caractères extraits). "
-                + (
-                    "Si ce document est scanné, vérifiez que l'OCR reconnaît sa langue."
-                    if ocr_available()
-                    else "Ce document semble scanné et l'OCR local n'est pas configuré."
-                )
-            )
-        embeddings = await embed_texts([chunk.content for chunk in chunks])
-    except DocumentError as exc:
-        logger.warning("Import refusé (%s) : %s", original_filename, exc)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except ModelUnavailableError as exc:
-        # Not the document's fault: say so, and with a status code that says so.
-        logger.error("Import impossible (%s) : %s", original_filename, exc)
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        metadata = metadata_from_form(title, classification, allowed_roles, department,
+                                      valid_until, review_due, owner_id)
+        document, chunks = await ingest(db, user, file.filename or "", await file.read(), metadata,
+                                        file.content_type or "application/octet-stream")
+    except IngestionRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return {**with_owner(document, owner_names(db, [document])), "chunks_indexed": chunks}
 
-    stored_filename = f"{uuid.uuid4().hex}{extension}"
-    storage_path = DOCUMENT_STORAGE_DIR / stored_filename
-    storage_path.write_bytes(content)
-    try:
-        # Re-importing the same filename supersedes the previous version rather than
-        # leaving two copies that both answer questions.
-        previous = db.scalars(
-            select(DocumentRecord)
-            .where(DocumentRecord.original_filename == original_filename)
-            .where(DocumentRecord.is_current.is_(True))
-        ).all()
-        for superseded in previous:
-            superseded.is_current = False
-        document = DocumentRecord(
-            title=title.strip(),
-            original_filename=original_filename,
-            stored_filename=stored_filename,
-            content_type=file.content_type or "application/octet-stream",
-            classification=classification.strip().lower(),
-            allowed_roles=safe_roles(allowed_roles),
-            created_by=user.id,
-            version=max((item.version for item in previous), default=0) + 1,
-            is_current=True,
-            valid_until=parse_valid_until(valid_until),
-            department=safe_department(department),
+
+@app.post("/documents/upload-batch")
+async def upload_documents_batch(
+    files: list[UploadFile] = File(...),
+    classification: str = Form("interne", min_length=2, max_length=64),
+    allowed_roles: str = Form(DEFAULT_ALLOWED_ROLES),
+    department: str = Form(TRANSVERSE),
+    valid_until: str = Form(""),
+    review_due: str = Form(""),
+    owner_id: int | None = Form(None),
+    user: User = Depends(require_roles("admin", "document_manager")),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Several documents sharing one set of metadata, each titled after its filename.
+
+    Importing an agency's corpus one form at a time does not happen, so this is a
+    prerequisite for real use rather than a convenience. Each file is ingested on
+    its own: one unreadable PDF is reported and the others still go in. A batch is
+    all-or-nothing on nothing but its shared metadata, which is checked first.
+    """
+    limit = settings.document_batch_max_files
+    if not files:
+        raise HTTPException(status_code=422, detail="Aucun fichier reçu.")
+    if len(files) > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Trop de fichiers ({len(files)}) : {limit} au maximum par envoi. "
+                   "Pour un dossier entier, utilisez l'import depuis le serveur (app.import_folder).",
         )
-        db.add(document)
-        db.flush()
-        db.add_all([
-            DocumentChunk(
-                document_id=document.id,
-                ordinal=index,
-                page_number=chunk.page_number,
-                content=chunk.content,
-                embedding=embeddings[index],
-            )
-            for index, chunk in enumerate(chunks)
-        ])
-        db.add(AuditEvent(actor_id=user.id, document_id=document.id, event_type="document_uploaded"))
-        db.commit()
-        db.refresh(document)
-    except Exception:
-        db.rollback()
-        storage_path.unlink(missing_ok=True)
-        raise
+    try:
+        # Validated once, before any file is read: a bad date should not cost fifty
+        # embeddings before being noticed.
+        shared = metadata_from_form("", classification, allowed_roles, department,
+                                    valid_until, review_due, owner_id)
+    except IngestionRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    return {**document_summary(document), "chunks_indexed": len(chunks)}
+    results: list[dict[str, object]] = []
+    for upload in files:
+        name = Path(upload.filename or "").name
+        metadata = DocumentMetadata(
+            title=title_from_filename(name),
+            classification=shared.classification,
+            allowed_roles=shared.allowed_roles,
+            department=shared.department,
+            valid_until=shared.valid_until,
+            review_due=shared.review_due,
+            owner_id=shared.owner_id,
+        )
+        try:
+            document, chunks = await ingest(db, user, name, await upload.read(), metadata,
+                                            upload.content_type or "application/octet-stream")
+            results.append({"filename": name, "status": "ok", "document_id": document.id,
+                            "title": document.title, "version": document.version, "chunks": chunks})
+        except IngestionRejected as exc:
+            results.append({"filename": name, "status": "error", "detail": exc.detail})
+    return {
+        "imported": sum(1 for row in results if row["status"] == "ok"),
+        "failed": sum(1 for row in results if row["status"] == "error"),
+        "results": results,
+    }
 
 
 @app.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1019,6 +1086,9 @@ def resolve_conversation(db: Session, conversation_id: int | None, user: User) -
     return conversation
 
 
+FOLLOW_UP_BONUS = 0.05  # precedence for the documents the previous answer cited
+
+
 async def build_chat_context(
     db: Session, conversation: Conversation, question: str, user: User, stream: bool
 ) -> ChatContext:
@@ -1027,19 +1097,50 @@ async def build_chat_context(
         for document in db.scalars(select(DocumentRecord).where(DocumentRecord.is_current.is_(True))).all()
         if can_access_document(user, document)
     }
+    referral = referral_sentence(contact_for(db, user))
     if not visible_documents:
-        return ChatContext(refusal=NO_DOCUMENTS_ANSWER, sources=[], request_body=None)
+        return ChatContext(refusal=NO_DOCUMENTS_ANSWER + referral, unanswered_reason="no_documents",
+                           referral=referral)
 
-    async def retrieve(search_question: str):
+    # A follow-up (« et pour un temps partiel ? ») is searched together with the
+    # question it follows, and the documents the last answer cited get precedence.
+    # Deterministic: an opening word and a length, never a model's judgement.
+    follow_up_documents: set[int] = set()
+    search_question = question
+    if is_follow_up(question):
+        previous_question, cited_ids, cited_names = previous_turn(db, conversation)
+        if previous_question:
+            search_question = f"{previous_question} {question}"
+            follow_up_documents = {i for i in cited_ids if i in visible_documents}
+            follow_up_documents |= {
+                document_id for document_id, document in visible_documents.items()
+                if document.original_filename in cited_names
+            }
+
+    captured: dict[str, list[float]] = {}
+
+    async def retrieve(query: str):
         """ACL is applied here, inside the injected retriever: the graph never sees
         a document the user is not allowed to read, even after a rewrite."""
         try:
             # Acronyms are expanded on the question only: the index stays untouched,
             # so the glossary can grow without re-indexing anything.
-            embedding = (await embed_texts([expand_for(user, search_question)]))[0]
+            embedding = (await embed_texts([expand_for(user, query)]))[0]
         except RagError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        return search_similar_chunks(db, embedding, list(visible_documents), TOP_K)
+        captured.setdefault(query, embedding)
+        matches = search_similar_chunks(db, embedding, list(visible_documents), TOP_K)
+        if not follow_up_documents:
+            return matches
+        cited = search_similar_chunks(db, embedding, sorted(follow_up_documents), TOP_K)
+        best: dict[int, tuple[float, object]] = {}
+        for score, chunk in matches:
+            best[chunk.id] = (score, chunk)
+        for score, chunk in cited:
+            boosted = score + FOLLOW_UP_BONUS
+            if chunk.id not in best or best[chunk.id][0] < boosted:
+                best[chunk.id] = (boosted, chunk)
+        return sorted(best.values(), key=lambda item: item[0], reverse=True)[:TOP_K]
 
     def run_tool(tool_question: str) -> str | None:
         """Executes a business tool as the caller. Returns None to fall back to documents."""
@@ -1057,18 +1158,43 @@ async def build_chat_context(
         db.commit()
         return answer
 
+    def find_validated(asked: str) -> str | None:
+        """A validated answer for this exact meaning, within the caller's perimeter."""
+        validated = find_validated_answer(db, user, asked)
+        if validated is None:
+            return None
+        validator = db.get(User, validated.validated_by)
+        moment = validated.validated_at
+        date = (moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)).strftime("%d/%m/%Y")
+        validated.times_served = (validated.times_served or 0) + 1
+        db.add(AuditEvent(actor_id=user.id, document_id=None, event_type="validated_answer_served"))
+        db.commit()
+        who = validator.username if validator else "un administrateur"
+        return f"{validated.answer}\n\n*Réponse validée par {who} le {date}.*"
+
     assistant_graph = build_assistant_graph(
-        retrieve, RELEVANCE_THRESHOLD, settings.max_retrieval_attempts, run_tool=run_tool
+        retrieve, RELEVANCE_THRESHOLD, settings.max_retrieval_attempts,
+        run_tool=run_tool, find_validated=find_validated,
     )
-    final_state = await assistant_graph.ainvoke({"question": question, "search_question": question, "attempts": 0})
+    final_state = await assistant_graph.ainvoke(
+        {"question": question, "search_question": search_question, "attempts": 0}
+    )
     outcome = final_state.get("outcome")
 
     if outcome == "tool":
         return ChatContext(refusal=final_state["tool_answer"], sources=[], request_body=None)
+    if outcome == "validated":
+        return ChatContext(refusal=final_state["validated_answer"], sources=[], request_body=None)
     if outcome == "social":
         return ChatContext(refusal=social_answer(user, list(visible_documents.values())), sources=[], request_body=None)
+    question_embedding = captured.get(question)
     if outcome != "answer":
-        return ChatContext(refusal=no_match_answer(list(visible_documents.values())), sources=[], request_body=None)
+        return ChatContext(
+            refusal=no_match_answer(list(visible_documents.values())) + referral,
+            unanswered_reason="no_match",
+            question_embedding=question_embedding,
+            referral=referral,
+        )
 
     selected_chunks = final_state["chunks"]
     rewritten = bool(final_state.get("rewritten"))
@@ -1087,6 +1213,8 @@ async def build_chat_context(
         )
         source_metadata.append({
             "id": source_id,
+            # Kept so a follow-up question can give this document precedence.
+            "document_id": document.id,
             "title": document.title,
             "filename": document.original_filename,
             "page": chunk.page_number,
@@ -1115,7 +1243,26 @@ async def build_chat_context(
         "options": {"num_ctx": 4096, "temperature": 0.15},
         "keep_alive": "10m",
     }
-    return ChatContext(refusal=None, sources=source_metadata, request_body=request_body, rewritten=rewritten)
+    return ChatContext(
+        refusal=None, sources=source_metadata, request_body=request_body, rewritten=rewritten,
+        question_embedding=question_embedding, referral=referral,
+    )
+
+
+async def remember_gap(db: Session, user: User, question: str, reason: str,
+                       embedding: list[float] | None) -> None:
+    """Records an unanswered question. Never lets a failure here break the answer:
+    losing one data point is better than losing the reply the agent is waiting for."""
+    try:
+        if embedding is None:
+            try:
+                embedding = (await embed_texts([question]))[0]
+            except RagError:
+                embedding = None
+        record_unanswered(db, user, question, reason, embedding)
+    except Exception:  # noqa: BLE001 - analytics must never fail a reply
+        db.rollback()
+        logger.exception("Question sans réponse non enregistrée")
 
 
 @app.post("/search")
@@ -1170,6 +1317,8 @@ async def chat(
     conversation = resolve_conversation(db, payload.conversation_id, user)
     context = await build_chat_context(db, conversation, payload.message, user, stream=False)
     if context.refusal is not None:
+        if context.unanswered_reason:
+            await remember_gap(db, user, payload.message, context.unanswered_reason, context.question_embedding)
         return save_assistant_exchange(db, conversation, payload.message, context.refusal, [], user.id)
 
     try:
@@ -1180,6 +1329,11 @@ async def chat(
         raise HTTPException(status_code=503, detail=MODEL_UNAVAILABLE) from exc
 
     answer = extract_answer(response.json().get("message", {}))
+    if looks_like_refusal(answer):
+        # Most refusals happen here, not in the graph: extracts were found but the
+        # model judged them insufficient. They are the gaps worth counting.
+        await remember_gap(db, user, payload.message, "model_refusal", context.question_embedding)
+        answer += context.referral
     return save_assistant_exchange(db, conversation, payload.message, answer, context.sources, user.id)
 
 
@@ -1206,6 +1360,11 @@ async def chat_stream(
                 return save_assistant_exchange(stream_db, stored, question, answer, sources, user_id)
 
         if context.refusal is not None:
+            if context.unanswered_reason:
+                with SessionLocal() as gap_db:
+                    account = gap_db.get(User, user_id)
+                    await remember_gap(gap_db, account, question, context.unanswered_reason,
+                                       context.question_embedding)
             saved = persist(context.refusal, [])
             yield event({"type": "meta", "sources": [], "reasoning_expected": False})
             yield event({"type": "answer_start"})
@@ -1258,6 +1417,14 @@ async def chat_stream(
             yield event({"type": "token", "value": reasoning_buffer})
 
         answer = extract_answer({"content": "".join(answer_parts)})
+        if looks_like_refusal(answer):
+            with SessionLocal() as gap_db:
+                account = gap_db.get(User, user_id)
+                await remember_gap(gap_db, account, question, "model_refusal", context.question_embedding)
+            if context.referral:
+                # Sent after the model's own words, so the agent sees who to ask.
+                yield event({"type": "token", "value": context.referral})
+                answer += context.referral
         saved = persist(answer, context.sources)
         yield event({"type": "done", "conversation": saved["conversation"], "message_id": saved["message_id"]})
 
@@ -1461,6 +1628,32 @@ def administration_overview(
     verdicts = db.scalars(select(AnswerFeedback)).all()
     expired = [document for document in documents if is_expired(document)]
 
+    # Documents that need someone: past their review date, soon due, or with nobody
+    # responsible for them at all.
+    names = owner_names(db, list(documents))
+    active_ids = {account.id for account in accounts if account.is_active and account.status == "active"}
+    reviews = [
+        {
+            **{key: summary[key] for key in ("id", "title", "department_label", "review_due", "review_status")},
+            "owner": names.get(document.owner_id) if document.owner_id else None,
+            "owner_inactive": bool(document.owner_id) and document.owner_id not in active_ids,
+        }
+        for document in documents
+        for summary in [document_summary(document)]
+        if summary["review_status"] in {"overdue", "due_soon"}
+        or not document.owner_id
+        or document.owner_id not in active_ids
+    ]
+    reviews.sort(key=lambda row: (row["review_status"] != "overdue", row["review_due"] or "9999"))
+
+    unanswered = db.scalar(
+        select(func.count()).select_from(UnansweredQuestion).where(UnansweredQuestion.resolved.is_(False))
+    ) or 0
+    contacts = {contact.department for contact in db.scalars(select(ServiceContact)).all()}
+    pending_resets = db.scalar(
+        select(func.count()).select_from(PasswordResetRequest).where(PasswordResetRequest.status == "pending")
+    ) or 0
+
     return {
         "documents": {
             "total": len(documents),
@@ -1478,6 +1671,8 @@ def administration_overview(
             # An account with no department reads only transverse documents. Almost
             # always an oversight, so it is surfaced rather than merely stored.
             "unattached": len([a for a in accounts if a.department is None and a.status == "active"]),
+            "without_email": len([a for a in accounts if not a.email and a.status == "active"]),
+            "password_resets_pending": pending_resets,
             "by_role": by_role,
         },
         "departments": per_department,
@@ -1486,6 +1681,17 @@ def administration_overview(
             "wrong": len([v for v in verdicts if v.verdict == "wrong"]),
         },
         "activity_7d": activity,
+        "reviews": {
+            "overdue": sum(1 for row in reviews if row["review_status"] == "overdue"),
+            "due_soon": sum(1 for row in reviews if row["review_status"] == "due_soon"),
+            "without_owner": sum(1 for d in documents if not d.owner_id),
+            "items": reviews[:50],
+        },
+        "gaps": {"unanswered": unanswered},
+        # Perimeters with nobody to refer an agent to when the assistant cannot answer.
+        "contacts_missing": [
+            department_label(name) for name in sorted(DOCUMENT_DEPARTMENTS) if name not in contacts
+        ],
         "model": {
             "chat": get_settings().ollama_chat_model,
             "embedding": get_settings().ollama_embedding_model,

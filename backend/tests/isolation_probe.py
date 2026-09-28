@@ -47,6 +47,7 @@ from app.database import (
     DocumentChunk,
     DocumentRecord,
     SessionLocal,
+    UnansweredQuestion,
     User,
     initialise_database,
 )
@@ -190,6 +191,8 @@ finally:
             db.execute(delete(Conversation).where(Conversation.id.in_(conversations)))
         db.execute(delete(AnswerFeedback).where(AnswerFeedback.user_id == account_id))
         db.execute(delete(AuditEvent).where(AuditEvent.actor_id == account_id))
+        # Refusals are recorded as gaps; the test's must not reach the real screen.
+        db.execute(delete(UnansweredQuestion).where(UnansweredQuestion.user_id == account_id))
         db.execute(delete(User).where(User.id == account_id))
         db.commit()
 

@@ -38,7 +38,7 @@ from sqlalchemy import delete, select
 from app.access import DEPARTMENTS, TRANSVERSE, department_label
 from app.auth import password_hash
 from app.config import get_settings
-from app.database import AuditEvent, ChatMessage, Conversation, DocumentChunk, DocumentRecord, SessionLocal, User
+from app.database import AuditEvent, ChatMessage, Conversation, DocumentChunk, DocumentRecord, SessionLocal, UnansweredQuestion, User
 from app.main import app
 from app.rag import DOCUMENT_STORAGE_DIR
 
@@ -47,25 +47,9 @@ DATASET = Path(__file__).parent / "evaluation" / "dataset.json"
 ADMIN = "admin"  # the key used for questions that carry no service
 PASSWORD = "EvaluationPassword-2026"
 
-REFUSAL_HINTS = (
-    "ne trouve pas",
-    "pas présente",
-    "pas disponible",
-    "aucun document",
-    "pas d'information",
-    "ne contiennent pas",
-    "ne permettent pas",
-)
-
-
-def normalise(text: str) -> str:
-    stripped = unicodedata.normalize("NFD", text.lower())
-    return "".join(character for character in stripped if unicodedata.category(character) != "Mn")
-
-
-def looks_like_refusal(answer: str) -> bool:
-    lowered = normalise(answer)
-    return any(normalise(hint) in lowered for hint in REFUSAL_HINTS)
+# One definition of "this answer is a refusal", shared with the application, which
+# uses it to record unanswered questions as gaps.
+from app.refusals import looks_like_refusal, normalise  # noqa: E402
 
 
 def score(rows: list[dict], key: str) -> str:
@@ -264,6 +248,8 @@ def main() -> None:
                 db.execute(delete(ChatMessage).where(ChatMessage.conversation_id.in_(conversations)))
                 db.execute(delete(Conversation).where(Conversation.id.in_(conversations)))
             db.execute(delete(AuditEvent).where(AuditEvent.actor_id.in_(account_ids)))
+            # Refusals are recorded as gaps; the test's must not reach the real screen.
+            db.execute(delete(UnansweredQuestion).where(UnansweredQuestion.user_id.in_(account_ids)))
             db.execute(delete(User).where(User.id.in_(account_ids)))
             db.commit()
 
