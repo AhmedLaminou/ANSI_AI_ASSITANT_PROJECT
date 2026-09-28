@@ -82,6 +82,13 @@ class User(Base):
     status: Mapped[str] = mapped_column(String(16), default="active", server_default="active", index=True)
     requested_department: Mapped[str | None] = mapped_column(String(32), nullable=True)
     request_reason: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # Carried in every session token and compared on every request. Incrementing it
+    # revokes every session issued before - the only way a stateless token can be
+    # withdrawn before it expires.
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Set when an administrator chooses the password: the agent must replace it
+    # before doing anything else, so the administrator never knows a live password.
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
 
 class DocumentRecord(Base):
@@ -105,6 +112,12 @@ class DocumentRecord(Base):
     department: Mapped[str] = mapped_column(
         String(32), default="transverse", server_default="transverse", index=True
     )
+    # A corpus without owners rots: nobody notices a procedure has gone stale until
+    # an agent acts on it. The owner is who gets asked; the review date is when.
+    # Distinct from valid_until, which is when the text stops being true -
+    # review_due is when someone must check whether it still is.
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    review_due: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class DocumentChunk(Base):
@@ -169,6 +182,99 @@ class AuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class PasswordResetRequest(Base):
+    """An agent who forgot their password asks the administrator.
+
+    Offline, there is no mail relay to send a reset link through, and an
+    unauthenticated endpoint that resets a password would be a second way in. So the
+    endpoint only *files a request*; the administrator acts on it and hands over a
+    temporary password by another channel, which the agent must then replace.
+    """
+
+    __tablename__ = "password_reset_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)  # pending|resolved|dismissed
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    handled_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    handled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UnansweredQuestion(Base):
+    """A question the assistant could not answer - the most useful signal it produces.
+
+    Every refusal is either a missing document or a vocabulary gap. Aggregated,
+    they say what the corpus lacks; left in the audit trail, they say nothing.
+
+    The department is copied at the time of the question rather than joined from the
+    account, so a later transfer does not rewrite history - the lesson of the audit
+    journal, which shows current attributes (ARCHITECTURE_TECHNIQUE 7.12).
+
+    Holds question text, so it falls under the same retention rule as conversations.
+    """
+
+    __tablename__ = "unanswered_questions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    department: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    question: Mapped[str] = mapped_column(Text)
+    # "no_match": nothing retrieved was close enough. "model_refusal": extracts were
+    # found but the model judged them insufficient - by far the commoner case, since
+    # the similarity threshold separates almost nothing (5.1).
+    reason: Mapped[str] = mapped_column(String(24))
+    embedding: Mapped[list[float] | None] = mapped_column(Embedding, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+    # An administrator marks a gap as addressed once a document covers it.
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+
+
+class ServiceContact(Base):
+    """Who to ask when the assistant cannot answer, per perimeter.
+
+    "Je ne trouve pas" is honest and unhelpful. For an internal assistant the right
+    answer is often a person. One row per department, plus "transverse" for the
+    general contact.
+    """
+
+    __tablename__ = "service_contacts"
+
+    department: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    email: Mapped[str] = mapped_column(String(160), default="")
+    phone: Mapped[str] = mapped_column(String(40), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class ValidatedAnswer(Base):
+    """An answer a person checked once, served instantly thereafter.
+
+    The frequent questions are regenerated at thirty seconds each, forever, and each
+    regeneration is a fresh chance to be wrong. A validated answer is faster and more
+    reliable, because a human read it.
+
+    It carries a department and obeys the same perimeter rule as a document: a finance
+    answer validated by an administrator is not served to an HR agent.
+    """
+
+    __tablename__ = "validated_answers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    question: Mapped[str] = mapped_column(Text)
+    # JSON list of alternative phrasings, matched after normalisation.
+    phrasings: Mapped[str] = mapped_column(Text, default="[]")
+    answer: Mapped[str] = mapped_column(Text)
+    department: Mapped[str] = mapped_column(String(32), default="transverse", index=True)
+    validated_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    validated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", index=True)
+    times_served: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
 def ensure_extensions() -> None:
     """pgvector must exist before create_all() can build a `vector` column."""
     if not is_postgres():
@@ -189,6 +295,8 @@ def ensure_schema() -> None:
             "is_current": "BOOLEAN NOT NULL DEFAULT TRUE" if is_postgres() else "BOOLEAN NOT NULL DEFAULT 1",
             "valid_until": "TIMESTAMP NULL" if is_postgres() else "DATETIME NULL",
             "department": "VARCHAR(32) NOT NULL DEFAULT 'transverse'",
+            "owner_id": "INTEGER NULL",
+            "review_due": "TIMESTAMP NULL" if is_postgres() else "DATETIME NULL",
         },
         "users": {
             "email": "VARCHAR(160) NULL",
@@ -196,6 +304,10 @@ def ensure_schema() -> None:
             "status": "VARCHAR(16) NOT NULL DEFAULT 'active'",
             "requested_department": "VARCHAR(32) NULL",
             "request_reason": "TEXT NOT NULL DEFAULT ''",
+            "token_version": "INTEGER NOT NULL DEFAULT 0",
+            "must_change_password": (
+                "BOOLEAN NOT NULL DEFAULT FALSE" if is_postgres() else "BOOLEAN NOT NULL DEFAULT 0"
+            ),
         },
     }
     with engine.begin() as connection:

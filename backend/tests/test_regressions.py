@@ -116,7 +116,8 @@ def test_an_administrator_can_create_an_account_with_a_department(administrator)
         new_name = f"reg-user-{run}"
         created.append(new_name)
         response = client.post("/admin/users", json={
-            "username": new_name, "password": PASSWORD, "role": "user", "department": "rh",
+            "username": new_name, "email": f"{new_name}@ansi.ne",
+            "password": PASSWORD, "role": "user", "department": "rh",
         })
         assert response.status_code == 201, response.text
         assert response.json()["department"] == "rh"
@@ -131,7 +132,7 @@ def test_an_unattached_account_can_be_attached_afterwards(administrator):
         orphan = f"reg-orphan-{run}"
         created.append(orphan)
         made = client.post("/admin/users", json={
-            "username": orphan, "password": PASSWORD, "role": "user",
+            "username": orphan, "email": f"{orphan}@ansi.ne", "password": PASSWORD, "role": "user",
         })
         assert made.status_code == 201
         assert made.json()["department"] is None
@@ -150,7 +151,8 @@ def test_every_department_is_accepted_at_creation(administrator, department):
         account = f"reg-{department}-{run}"
         created.append(account)
         response = client.post("/admin/users", json={
-            "username": account, "password": PASSWORD, "role": "user", "department": department,
+            "username": account, "email": f"{account}@ansi.ne",
+            "password": PASSWORD, "role": "user", "department": department,
         })
         assert response.status_code == 201, response.text
 
@@ -160,7 +162,8 @@ def test_an_invented_department_is_still_refused(administrator):
     with TestClient(app) as client:
         client.post("/auth/login", json={"username": name, "password": PASSWORD})
         response = client.post("/admin/users", json={
-            "username": f"reg-bad-{run}", "password": PASSWORD, "role": "user",
+            "username": f"reg-bad-{run}", "email": f"reg-bad-{run}@ansi.ne",
+            "password": PASSWORD, "role": "user",
             "department": "direction-generale",
         })
         assert response.status_code == 422

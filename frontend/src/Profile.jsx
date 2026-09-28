@@ -44,9 +44,9 @@ function PasswordCard({ onToast }) {
     <form className="panel-card" onSubmit={submit}>
       <h3>Changer mon mot de passe</h3>
       <p className="muted">
-        Il n'existe pas de procédure « mot de passe oublié » : l'assistant fonctionne hors ligne,
-        il n'y a donc aucun relais pour envoyer un lien. Un administrateur peut le réinitialiser
-        depuis le serveur.
+        En cas d'oubli, la demande se fait depuis l'écran de connexion : l'assistant fonctionne
+        hors ligne, elle est donc transmise à l'administrateur, qui vous communique un mot de
+        passe provisoire à remplacer.
       </p>
       <label>
         Mot de passe actuel
@@ -69,10 +69,38 @@ function PasswordCard({ onToast }) {
         {busy ? 'Enregistrement…' : 'Changer le mot de passe'}
       </button>
       <p className="field-hint">
-        À savoir : changer votre mot de passe ne ferme pas les sessions déjà ouvertes ailleurs.
-        Une session reste valide huit heures.
+        Changer votre mot de passe ferme toutes vos autres sessions ; celle-ci reste ouverte.
       </p>
     </form>
+  )
+}
+
+function SessionsCard({ onToast }) {
+  const [busy, setBusy] = useState(false)
+
+  async function revoke() {
+    setBusy(true)
+    try {
+      await request('/auth/sessions/revoke', { method: 'POST' })
+      onToast('Toutes vos autres sessions ont été fermées.', 'success')
+    } catch (requestError) {
+      onToast(requestError.message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="panel-card">
+      <h3>Sessions ouvertes</h3>
+      <p className="muted">
+        Une session oubliée sur un poste partagé reste valide huit heures. Vous pouvez la fermer
+        d'ici sans changer votre mot de passe — celle que vous utilisez en ce moment reste ouverte.
+      </p>
+      <button className="text-button" onClick={revoke} disabled={busy}>
+        {busy ? 'Fermeture…' : 'Me déconnecter partout ailleurs'}
+      </button>
+    </div>
   )
 }
 
@@ -160,7 +188,10 @@ export default function Profile({ user, onToast }) {
                 Dernière action enregistrée : {formatDate(profile.activity.last_action)}.
               </p>
             </div>
-            <PasswordCard onToast={onToast} />
+            <div className="profile-side">
+              <PasswordCard onToast={onToast} />
+              <SessionsCard onToast={onToast} />
+            </div>
           </div>
         </>
       )}

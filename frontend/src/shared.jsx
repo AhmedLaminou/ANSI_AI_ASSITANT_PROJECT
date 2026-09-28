@@ -40,6 +40,12 @@ export async function request(path, options = {}) {
       : Array.isArray(detail)
         ? detail.map((item) => item?.msg ?? String(item)).join(' ')
         : 'Une erreur est survenue.'
+    // A 401 after sign-in means the session was closed from elsewhere. The two paths
+    // excluded answer 401 in the normal course of things: a wrong password, and the
+    // first check on page load before anyone has signed in.
+    if (response.status === 401 && path !== '/auth/login' && path !== '/auth/me') {
+      window.dispatchEvent(new CustomEvent('ansi:session-lost', { detail: message }))
+    }
     throw new Error(message)
   }
   return response.status === 204 ? null : response.json()

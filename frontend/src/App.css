@@ -2521,3 +2521,144 @@ nav button.active .nav-key,
 .role-grid .field-hint {
   margin: 0;
 }
+
+
+/* ---------------------------------------------------------------------------
+   Connexion : champ mot de passe avec bouton d'affichage, liens secondaires.
+   --------------------------------------------------------------------------- */
+
+.password-field {
+  position: relative;
+  display: block;
+}
+
+.password-field input {
+  width: 100%;
+  padding-right: 44px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.password-toggle[aria-pressed='true'] {
+  color: var(--accent-text);
+}
+
+.login-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.login-layout.single {
+  grid-template-columns: 1fr;
+  place-items: center;
+}
+
+.profile-side {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.user-email {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.inline-form input {
+  min-width: 220px;
+  flex: 1 1 220px;
+}
+
+/* ---------------------------------------------------------------------------
+   Comptes : une ligne par compte, sur deux niveaux. L'identité en haut, les
+   actions dessous. En une seule ligne flexible, l'ajout de l'adresse et de la
+   fermeture des sessions faisait déborder la page horizontalement.
+   --------------------------------------------------------------------------- */
+
+.admin-grid {
+  /* minmax(0, …) : sans lui, une colonne de grille ne descend jamais sous la
+     largeur de son contenu et pousse la page au lieu de laisser le contenu passer
+     à la ligne. */
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  align-items: start;
+}
+
+.user-list article {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  row-gap: 12px;
+}
+
+.user-list .user-name {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 280px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.user-list .user-name strong {
+  flex-basis: 100%;
+}
+
+.user-list .user-name .role-pill,
+.user-list .user-name .tag-department {
+  margin: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.user-list .user-email {
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+}
+
+.user-list .inline-form,
+.user-list .user-actions {
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  padding-left: 46px;
+}
+
+.user-list small {
+  margin-left: auto;
+}
+
+@media (max-width: 1100px) {
+  .admin-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .user-list .inline-form,
+  .user-list .user-actions {
+    padding-left: 0;
+  }
+}

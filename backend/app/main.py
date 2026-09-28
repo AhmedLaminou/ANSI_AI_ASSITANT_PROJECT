@@ -18,7 +18,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from .auth import create_access_token, get_current_user, password_hash, require_roles, verify_password
+from .auth import (
+    SESSION_COOKIE,
+    get_current_user,
+    password_hash,
+    require_roles,
+    revoke_sessions,
+    set_session_cookie,
+    verify_password,
+)
 from .access import (
     DEPARTMENT_LABELS,
     DEPARTMENTS,
@@ -39,6 +47,7 @@ from .database import (
     Conversation,
     DocumentChunk,
     DocumentRecord,
+    PasswordResetRequest,
     SessionLocal,
     User,
     engine,
@@ -176,7 +185,10 @@ def email_field(**kwargs):
 
 
 class LoginRequest(BaseModel):
-    username: str = Field(min_length=3, max_length=64)
+    # Named "username" for compatibility with existing clients; it carries the
+    # professional address, or a username for accounts that do not have one yet.
+    # 160 and not 64: an address is longer than a username.
+    username: str = Field(min_length=3, max_length=160)
     password: str = Field(min_length=8, max_length=128)
 
 
@@ -190,8 +202,10 @@ class RenameConversationRequest(BaseModel):
 
 
 class CreateUserRequest(BaseModel):
-    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
-    email: str | None = email_field(default=None)
+    """The address is the credential. The username is derived from it unless given."""
+
+    email: str = email_field()
+    username: str | None = Field(default=None, min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
     password: str = Field(min_length=12, max_length=128)
     role: str = Field(default="user")
     department: str | None = None
@@ -219,6 +233,16 @@ class UpdateUserRequest(BaseModel):
     role: str | None = None
     is_active: bool | None = None
     department: str | None = None
+    # Recording an address makes it the account's only sign-in identifier.
+    email: str | None = email_field(default=None)
+
+
+class PasswordResetRequestIn(BaseModel):
+    email: str = email_field()
+
+
+class ResolveResetRequest(BaseModel):
+    password: str = Field(min_length=12, max_length=128)
 
 
 class ResetPasswordRequest(BaseModel):
@@ -435,6 +459,7 @@ def account_summary(account: User) -> dict[str, object]:
         "department": account.department,
         "department_label": department_label(account.department),
         "status": account.status,
+        "must_change_password": bool(account.must_change_password),
     }
 
 
@@ -522,13 +547,15 @@ def login(
 ) -> None:
     client_ip = request.client.host if request.client else "unknown"
     enforce_login_rate_limit(payload.username, client_ip)
-    # Accounts predating the email column sign in by username; registrations since
-    # then sign in by address. Accepting either keeps both working without a
-    # migration that would invent an address for existing agents.
     identifier = payload.username.strip()
-    user = db.scalar(
-        select(User).where((User.username == identifier) | (User.email == identifier.lower()))
-    )
+    if "@" in identifier:
+        user = db.scalar(select(User).where(User.email == identifier.lower()))
+    else:
+        # A username still signs in, but only while the account has no address.
+        # Once an administrator records one, the address is the only credential:
+        # one account, one identifier - which is also what makes a reset request
+        # unambiguous. No migration invents addresses for existing agents.
+        user = db.scalar(select(User).where(User.username == identifier).where(User.email.is_(None)))
     if user and user.status == "pending" and verify_password(payload.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -543,21 +570,13 @@ def login(
         if user:
             db.add(AuditEvent(actor_id=user.id, document_id=None, event_type="login_failed"))
             db.commit()
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identifiants invalides")
-    response.set_cookie(
-        key="ansi_session",
-        value=create_access_token(user),
-        httponly=True,
-        secure=settings.cookie_secure,
-        samesite="lax",
-        max_age=8 * 60 * 60,
-        path="/",
-    )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identifiants invalides.")
+    set_session_cookie(response, user)
 
 
 @app.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(response: Response) -> None:
-    response.delete_cookie("ansi_session", path="/")
+    response.delete_cookie(SESSION_COOKIE, path="/")
 
 
 @app.get("/auth/me")
@@ -571,6 +590,7 @@ def current_user(user: User = Depends(get_current_user)) -> dict[str, object]:
         "department": user.department,
         "department_label": department_label(user.department),
         "sees_every_department": user.role == "admin",
+        "must_change_password": bool(user.must_change_password),
     }
 
 
@@ -625,17 +645,15 @@ def my_profile(user: User = Depends(get_current_user), db: Session = Depends(get
 @app.post("/auth/password", status_code=status.HTTP_204_NO_CONTENT)
 def change_my_password(
     payload: ChangePasswordRequest,
+    response: Response,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> None:
     """An agent changes their own password, knowing the current one.
 
-    Until now only an administrator could reset a password, which meant every agent
-    who suspected their password was known had to ask someone else.
-
-    Caveat, and it is the one real hole left in the application: changing a password
-    does **not** revoke sessions already issued. A stolen session stays valid for up
-    to eight hours (§7.4).
+    Every other session is revoked, and this one is re-issued so the agent stays
+    signed in here. An agent changes their password precisely when they believe it
+    is known, so leaving the other sessions alive would defeat the point.
     """
     if not verify_password(payload.current_password, user.password_hash):
         raise HTTPException(status_code=403, detail="Mot de passe actuel incorrect.")
@@ -643,8 +661,72 @@ def change_my_password(
         raise HTTPException(status_code=422, detail="Le nouveau mot de passe doit différer de l'ancien.")
     account = db.get(User, user.id)
     account.password_hash = password_hash.hash(payload.new_password)
+    account.must_change_password = False
+    revoke_sessions(account)
     db.add(AuditEvent(actor_id=user.id, document_id=None, event_type="user_password_changed"))
     db.commit()
+    set_session_cookie(response, account)
+
+
+@app.post("/auth/sessions/revoke", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_my_other_sessions(
+    response: Response,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    """« Me déconnecter partout ailleurs » - a forgotten session on a shared machine."""
+    account = db.get(User, user.id)
+    revoke_sessions(account)
+    db.add(AuditEvent(actor_id=user.id, document_id=None, event_type="sessions_revoked"))
+    db.commit()
+    set_session_cookie(response, account)
+
+
+PASSWORD_RESET_ACKNOWLEDGEMENT = {
+    "detail": (
+        "Si un compte correspond à cette adresse, l'administrateur a été prévenu. Il vous "
+        "communiquera un mot de passe provisoire, que vous devrez changer à la connexion."
+    )
+}
+
+
+@app.post("/auth/password-reset-request", status_code=status.HTTP_202_ACCEPTED)
+def request_password_reset(
+    payload: PasswordResetRequestIn,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    """« Mot de passe oublié » - offline, it can only be a request to the administrator.
+
+    There is no mail relay to send a link through, and an unauthenticated endpoint
+    that *changes* a password would be a second way into every account. This one
+    only files a request. The same rules as registration follow from that:
+
+    - **identical response** whether the address exists or not, or it becomes an
+      oracle for who works at the agency;
+    - **rate limited** per source address;
+    - **one pending request per account**, so it cannot be used to flood the queue.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    limit = get_settings().registration_rate_limit_per_hour
+    if limit > 0 and not _within_limit(f"reset:ip:{client_ip}", limit, 3600):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Trop de demandes depuis cette adresse. Réessayez plus tard.",
+        )
+    account = db.scalar(select(User).where(User.email == payload.email.strip().lower()))
+    if account is None or not account.is_active or account.status != "active":
+        return PASSWORD_RESET_ACKNOWLEDGEMENT
+    already = db.scalar(
+        select(PasswordResetRequest)
+        .where(PasswordResetRequest.user_id == account.id)
+        .where(PasswordResetRequest.status == "pending")
+    )
+    if already is None:
+        db.add(PasswordResetRequest(user_id=account.id))
+        db.add(AuditEvent(actor_id=account.id, document_id=None, event_type="password_reset_requested"))
+        db.commit()
+    return PASSWORD_RESET_ACKNOWLEDGEMENT
 
 
 @app.patch("/documents/{document_id}")
@@ -1498,6 +1580,8 @@ def list_registrations(
         {
             "id": account.id,
             "username": account.username,
+            # The address is what tells the administrator who is asking.
+            "email": account.email,
             "requested_department": account.requested_department,
             "requested_department_label": department_label(account.requested_department),
             "reason": account.request_reason,
@@ -1564,16 +1648,23 @@ def create_user(
 ) -> dict[str, object]:
     if payload.role not in ROLES:
         raise HTTPException(status_code=422, detail="Rôle invalide")
-    if db.scalar(select(User).where(User.username == payload.username)):
+    email = payload.email.strip().lower()
+    if db.scalar(select(User).where(User.email == email)):
+        raise HTTPException(status_code=409, detail="Un compte utilise déjà cette adresse.")
+    if payload.username and db.scalar(select(User).where(User.username == payload.username)):
         raise HTTPException(status_code=409, detail="Cet identifiant existe déjà")
     if payload.department is not None and payload.department not in DEPARTMENTS:
         raise HTTPException(status_code=422, detail="Département invalide")
     account = User(
-        username=payload.username,
+        username=payload.username or unique_username_for(db, email),
+        email=email,
         password_hash=password_hash.hash(payload.password),
         role=payload.role,
         department=payload.department,
         status="active",
+        # The administrator chose this password, so the agent must replace it: an
+        # administrator should never know a password that is still in use.
+        must_change_password=True,
     )
     db.add(account)
     db.flush()
@@ -1606,6 +1697,17 @@ def update_user(
 
     if payload.department is not None and payload.department not in DEPARTMENTS:
         raise HTTPException(status_code=422, detail="Département invalide")
+    if payload.email is not None:
+        email = payload.email.strip().lower()
+        taken = db.scalar(select(User).where(User.email == email).where(User.id != account.id))
+        if taken:
+            raise HTTPException(status_code=409, detail="Un compte utilise déjà cette adresse.")
+        account.email = email
+    if account.is_active and not next_active:
+        # A deactivated account is refused on its next request anyway (is_active is
+        # read from the database), but revoking makes the intent explicit and
+        # survives a later reactivation: old sessions do not come back to life.
+        revoke_sessions(account)
     account.role = next_role
     account.is_active = next_active
     if payload.department is not None:
@@ -1628,6 +1730,102 @@ def reset_user_password(
     account = db.get(User, user_id)
     if not account:
         raise HTTPException(status_code=404, detail="Compte introuvable")
-    account.password_hash = password_hash.hash(payload.password)
+    apply_administrator_password(db, account, payload.password, admin)
+    db.commit()
+
+
+def apply_administrator_password(db: Session, account: User, password: str, admin: User) -> None:
+    """An administrator-chosen password: temporary by construction.
+
+    The account's sessions are revoked - a reset usually means the old password is
+    compromised - and the agent must pick their own at the next sign-in, so the
+    administrator never knows a password that is still in use.
+    """
+    account.password_hash = password_hash.hash(password)
+    account.must_change_password = True
+    revoke_sessions(account)
+    for pending in db.scalars(
+        select(PasswordResetRequest)
+        .where(PasswordResetRequest.user_id == account.id)
+        .where(PasswordResetRequest.status == "pending")
+    ).all():
+        pending.status = "resolved"
+        pending.handled_by = admin.id
+        pending.handled_at = datetime.now(timezone.utc)
     db.add(AuditEvent(actor_id=admin.id, document_id=None, event_type="user_password_reset"))
+
+
+@app.post("/admin/users/{user_id}/revoke-sessions", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_user_sessions(
+    user_id: int,
+    admin: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> None:
+    """Closes every session of an account, e.g. a lost laptop, without deactivating it."""
+    account = db.get(User, user_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Compte introuvable")
+    revoke_sessions(account)
+    db.add(AuditEvent(actor_id=admin.id, document_id=None, event_type="sessions_revoked"))
+    db.commit()
+
+
+@app.get("/admin/password-resets")
+def list_password_resets(
+    _: User = Depends(require_roles("admin")), db: Session = Depends(get_db)
+) -> list[dict[str, object]]:
+    pending = db.scalars(
+        select(PasswordResetRequest)
+        .where(PasswordResetRequest.status == "pending")
+        .order_by(PasswordResetRequest.created_at)
+    ).all()
+    accounts = {
+        account.id: account
+        for account in db.scalars(select(User).where(User.id.in_({r.user_id for r in pending}))).all()
+    } if pending else {}
+    return [
+        {
+            "id": entry.id,
+            "user_id": entry.user_id,
+            "username": accounts[entry.user_id].username if entry.user_id in accounts else "compte supprimé",
+            "email": accounts[entry.user_id].email if entry.user_id in accounts else None,
+            "department_label": department_label(accounts[entry.user_id].department)
+            if entry.user_id in accounts else None,
+            "created_at": entry.created_at.isoformat(),
+        }
+        for entry in pending
+    ]
+
+
+@app.post("/admin/password-resets/{request_id}/resolve", status_code=status.HTTP_204_NO_CONTENT)
+def resolve_password_reset(
+    request_id: int,
+    payload: ResolveResetRequest,
+    admin: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> None:
+    entry = db.get(PasswordResetRequest, request_id)
+    if not entry or entry.status != "pending":
+        raise HTTPException(status_code=404, detail="Demande introuvable ou déjà traitée.")
+    account = db.get(User, entry.user_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Compte introuvable")
+    apply_administrator_password(db, account, payload.password, admin)
+    db.commit()
+
+
+@app.post("/admin/password-resets/{request_id}/dismiss", status_code=status.HTTP_204_NO_CONTENT)
+def dismiss_password_reset(
+    request_id: int,
+    admin: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+) -> None:
+    """For a request the agent did not make, or one settled another way."""
+    entry = db.get(PasswordResetRequest, request_id)
+    if not entry or entry.status != "pending":
+        raise HTTPException(status_code=404, detail="Demande introuvable ou déjà traitée.")
+    entry.status = "dismissed"
+    entry.handled_by = admin.id
+    entry.handled_at = datetime.now(timezone.utc)
+    db.add(AuditEvent(actor_id=admin.id, document_id=None, event_type="password_reset_dismissed"))
     db.commit()

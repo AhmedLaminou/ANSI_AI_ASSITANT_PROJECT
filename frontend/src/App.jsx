@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 import Administration from './Administration.jsx'
+import { ForcedPasswordChange, Login } from './Login.jsx'
 import Profile from './Profile.jsx'
+import Users from './Users.jsx'
 import { useRoute } from './routing.js'
 import {
   CLASSIFICATIONS,
-  DEPARTMENTS,
   DOCUMENT_DEPARTMENTS,
   Icon,
   ROLES,
@@ -226,198 +227,6 @@ function ShortcutHelp({ open, onClose }) {
 // ---------------------------------------------------------------------------
 // Screens
 // ---------------------------------------------------------------------------
-
-function Login({ onLogin, theme, onToggleTheme }) {
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [mode, setMode] = useState('login')
-  const [requestedDepartment, setRequestedDepartment] = useState('technique')
-  const [reason, setReason] = useState('')
-  const [email, setEmail] = useState('')
-  const [fullName, setFullName] = useState('')
-
-  async function submit(event) {
-    event.preventDefault()
-    setBusy(true)
-    setError('')
-    setNotice('')
-    try {
-      if (mode === 'register') {
-        const response = await request('/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email,
-            full_name: fullName,
-            password,
-            requested_department: requestedDepartment,
-            reason,
-          }),
-        })
-        setNotice(response.detail)
-        setMode('login')
-        setPassword('')
-        setReason('')
-        setFullName('')
-        return
-      }
-      await request('/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      })
-      onLogin(await request('/auth/me'))
-    } catch (requestError) {
-      setError(requestError.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <main className="login-layout">
-      <button className="theme-toggle floating" onClick={onToggleTheme} title="Changer de thème">
-        <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
-      </button>
-      <section className="brand-panel">
-        <div className="brand-mark">A</div>
-        <p className="overline inverse">ANSI · ENVIRONNEMENT LOCAL</p>
-        <h1>La connaissance interne, sans quitter votre environnement.</h1>
-        <p>
-          Un assistant documentaire contrôlé&nbsp;: il cherche dans les documents autorisés, répond avec ses sources
-          et garde les données sur l'infrastructure locale.
-        </p>
-        <div className="security-note">
-          <Icon name="shield" />
-          Accès réservé aux utilisateurs authentifiés
-        </div>
-      </section>
-      <section className="login-panel">
-        <form className="login-card" onSubmit={submit}>
-          <p className="overline">{mode === 'register' ? 'CRÉER UN COMPTE' : 'ACCÈS SÉCURISÉ'}</p>
-          <h2>{mode === 'register' ? 'Créer mon compte' : 'Bienvenue'}</h2>
-          <p className="subtle">
-            {mode === 'register'
-              ? "Votre compte est créé immédiatement, puis transmis à l'administrateur pour validation. Il définit le rôle et le service accordés — vous pourrez vous connecter dès son accord."
-              : 'Connectez-vous pour accéder à votre espace documentaire.'}
-          </p>
-          {notice && <p className="form-notice">{notice}</p>}
-          {mode === 'register' ? (
-            <>
-              <label>
-                Nom et prénom
-                <input
-                  value={fullName}
-                  onChange={(event) => setFullName(event.target.value)}
-                  autoComplete="name"
-                  minLength="3"
-                  maxLength="120"
-                  placeholder="Amina Souley"
-                  required
-                />
-                <span className="field-hint">
-                  C'est ce que verra l'administrateur qui traitera votre demande.
-                </span>
-              </label>
-              <label>
-                Adresse professionnelle
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  autoComplete="email"
-                  maxLength="160"
-                  placeholder="prenom.nom@ansi.ne"
-                  required
-                />
-                <span className="field-hint">
-                  Elle servira d'identifiant de connexion.
-                </span>
-              </label>
-            </>
-          ) : (
-            <label>
-              Adresse ou identifiant
-              <input
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-                autoComplete="username"
-                minLength="3"
-                maxLength="160"
-                required
-              />
-            </label>
-          )}
-          <label>
-            Mot de passe
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
-              minLength={mode === 'register' ? 12 : 8}
-              maxLength="128"
-              required
-            />
-            {mode === 'register' && (
-              <span className="field-hint">12 caractères minimum.</span>
-            )}
-          </label>
-          {mode === 'register' && (
-            <>
-              <label>
-                Service souhaité
-                <select
-                  value={requestedDepartment}
-                  onChange={(event) => setRequestedDepartment(event.target.value)}
-                >
-                  {DEPARTMENTS.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Motif <span className="field-hint">(facultatif)</span>
-                <input
-                  value={reason}
-                  onChange={(event) => setReason(event.target.value)}
-                  maxLength={500}
-                  placeholder="Ex. stagiaire au service RH"
-                />
-              </label>
-            </>
-          )}
-          {error && <p className="error">{error}</p>}
-          <button className="primary full" disabled={busy}>
-            {busy
-              ? mode === 'register' ? 'Envoi…' : 'Connexion…'
-              : mode === 'register' ? 'Envoyer la demande →' : "Accéder à l'assistant →"}
-          </button>
-          <button
-            type="button"
-            className="link-button"
-            onClick={() => {
-              setMode(mode === 'register' ? 'login' : 'register')
-              setError('')
-              setNotice('')
-            }}
-          >
-            {mode === 'register' ? "J'ai déjà un compte — me connecter" : 'Pas encore de compte ? En créer un'}
-          </button>
-          <p className="form-note">
-            Ni vos questions ni vos documents ne quittent les serveurs de l'ANSI : aucun service
-            d'IA externe n'est appelé.
-          </p>
-        </form>
-      </section>
-    </main>
-  )
-}
 
 function Overview({ documents, system, user, onNavigate }) {
   const ready = system?.chat_model_ready && system?.embedding_model_ready
@@ -1235,258 +1044,6 @@ function DocumentsView({ user, documents, onRefresh, onToast }) {
   )
 }
 
-function RegistrationRow({ entry, onDecide }) {
-  const [department, setDepartment] = useState(entry.requested_department ?? 'technique')
-  return (
-    <article className="registration-row">
-      <div className="registration-meta">
-        <strong>{entry.username}</strong>
-        <span>
-          demande : {entry.requested_department_label}
-          {entry.reason ? ` — « ${entry.reason} »` : ''}
-        </span>
-      </div>
-      <select value={department} onChange={(event) => setDepartment(event.target.value)}>
-        {DEPARTMENTS.map((item) => (
-          <option key={item.value} value={item.value}>
-            {item.label}
-          </option>
-        ))}
-      </select>
-      <button className="text-button" onClick={() => onDecide(entry, 'approve', department)}>
-        <Icon name="check" /> Accorder
-      </button>
-      <button className="icon-button" title="Refuser" onClick={() => onDecide(entry, 'refuse')}>
-        <Icon name="close" />
-      </button>
-    </article>
-  )
-}
-
-function UsersView({ user, onToast }) {
-  const [users, setUsers] = useState([])
-  const [registrations, setRegistrations] = useState([])
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [role, setRole] = useState('user')
-  // A department is not optional in the design: an account without one reads only
-  // transverse documents and lands as « Non rattaché ». The form used to omit it,
-  // so every account created here was born unattached.
-  const [department, setDepartment] = useState(DEPARTMENTS[0].value)
-  const [error, setError] = useState('')
-
-  async function loadUsers() {
-    setUsers(await request('/admin/users'))
-  }
-
-  async function loadRegistrations() {
-    setRegistrations(await request('/admin/registrations'))
-  }
-
-  useEffect(() => {
-    if (user.role !== 'admin') return
-    loadUsers().catch((requestError) => setError(requestError.message))
-    loadRegistrations().catch((requestError) => setError(requestError.message))
-  }, [user.role])
-
-  async function decide(entry, action, department) {
-    try {
-      if (action === 'approve') {
-        await request(`/admin/registrations/${entry.id}/approve`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ role: 'user', department }),
-        })
-        onToast(`Accès accordé à « ${entry.username} ».`, 'success')
-      } else {
-        await request(`/admin/registrations/${entry.id}/refuse`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reason: '' }),
-        })
-        onToast(`Demande de « ${entry.username} » refusée.`, 'success')
-      }
-      await Promise.all([loadRegistrations(), loadUsers()])
-    } catch (requestError) {
-      onToast(requestError.message, 'error')
-    }
-  }
-
-  if (user.role !== 'admin') {
-    return (
-      <section className="workspace">
-        <div className="empty-state">
-          <h3>Accès administrateur requis</h3>
-          <p>La gestion des comptes est réservée aux administrateurs.</p>
-        </div>
-      </section>
-    )
-  }
-
-  async function updateAccount(accountId, changes) {
-    try {
-      await request(`/admin/users/${accountId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(changes),
-      })
-      await loadUsers()
-      onToast('Compte mis à jour.', 'success')
-    } catch (requestError) {
-      onToast(requestError.message, 'error')
-    }
-  }
-
-  async function resetPassword(account) {
-    const next = window.prompt(`Nouveau mot de passe pour « ${account.username} » (12 caractères minimum) :`)
-    if (next === null) return
-    if (next.length < 12) {
-      onToast('Le mot de passe doit contenir au moins 12 caractères.', 'error')
-      return
-    }
-    try {
-      await request(`/admin/users/${account.id}/password`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: next }),
-      })
-      onToast(`Mot de passe de « ${account.username} » réinitialisé.`, 'success')
-    } catch (requestError) {
-      onToast(requestError.message, 'error')
-    }
-  }
-
-  async function submit(event) {
-    event.preventDefault()
-    setError('')
-    try {
-      await request('/admin/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password, role, department }),
-      })
-      setUsername('')
-      setPassword('')
-      setRole('user')
-      setDepartment(DEPARTMENTS[0].value)
-      await loadUsers()
-      onToast(`Compte « ${username} » créé.`, 'success')
-    } catch (requestError) {
-      setError(requestError.message)
-    }
-  }
-
-  return (
-    <section className="workspace">
-      <div className="workspace-head">
-        <div>
-          <p className="overline">ADMINISTRATION</p>
-          <h1>Utilisateurs et rôles</h1>
-          <p>Les rôles gouvernent l'accès aux documents et aux fonctions d'administration.</p>
-        </div>
-      </div>
-      {registrations.length > 0 && (
-        <div className="registration-queue">
-          <p className="overline">DEMANDES D'ACCÈS EN ATTENTE ({registrations.length})</p>
-          <p className="queue-hint">
-            Le service demandé n'est qu'une indication : vous choisissez celui qui est réellement accordé.
-          </p>
-          {registrations.map((entry) => (
-            <RegistrationRow key={entry.id} entry={entry} onDecide={decide} />
-          ))}
-        </div>
-      )}
-      <div className="admin-grid">
-        <form className="upload-card" onSubmit={submit}>
-          <h3>Créer un compte</h3>
-          <label>
-            Identifiant
-            <input value={username} onChange={(event) => setUsername(event.target.value)} minLength="3" required />
-          </label>
-          <label>
-            Mot de passe initial
-            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength="12" required />
-          </label>
-          <label>
-            Rôle
-            <select value={role} onChange={(event) => setRole(event.target.value)}>
-              {ROLES.map((value) => (
-                <option key={value}>{value}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Service de rattachement
-            <select value={department} onChange={(event) => setDepartment(event.target.value)}>
-              {DEPARTMENTS.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className="field-hint">
-            Le rôle dit ce que le compte peut faire, le service ce qu'il peut lire. Un compte sans
-            service ne voit que les documents transverses.
-          </p>
-          {error && <p className="error">{error}</p>}
-          <button className="primary">Créer le compte</button>
-        </form>
-        <div className="user-list">
-          {users.map((account) => (
-            <article key={account.id} className={account.is_active ? '' : 'inactive'}>
-              <div className="avatar small">{account.username.slice(0, 1).toUpperCase()}</div>
-              <div className="user-name">
-                <strong>{account.username}</strong>
-                <span className={`role-pill ${account.role}`}>{account.role}</span>
-                <span className={`tag-department ${account.department || 'none'}`}>
-                  {account.department_label || 'Non rattaché'}
-                </span>
-                {account.id === user.id && <span className="role-pill self">vous</span>}
-              </div>
-              <div className="user-actions">
-                <select
-                  value={account.role}
-                  aria-label={`Rôle de ${account.username}`}
-                  disabled={account.id === user.id}
-                  onChange={(event) => updateAccount(account.id, { role: event.target.value })}
-                >
-                  {ROLES.map((value) => (
-                    <option key={value}>{value}</option>
-                  ))}
-                </select>
-                <select
-                  value={account.department || ''}
-                  aria-label={`Service de ${account.username}`}
-                  onChange={(event) => updateAccount(account.id, { department: event.target.value })}
-                >
-                  {!account.department && <option value="">Non rattaché</option>}
-                  {DEPARTMENTS.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  className="text-button"
-                  disabled={account.id === user.id}
-                  onClick={() => updateAccount(account.id, { is_active: !account.is_active })}
-                >
-                  {account.is_active ? 'Désactiver' : 'Réactiver'}
-                </button>
-                <button className="text-button" onClick={() => resetPassword(account)}>
-                  Mot de passe
-                </button>
-              </div>
-              <small className={account.is_active ? 'active-state' : ''}>{account.is_active ? 'Actif' : 'Inactif'}</small>
-            </article>
-          ))}
-        </div>
-      </div>
-    </section>
-  )
-}
-
 function App() {
   const [user, setUser] = useState(null)
   const [documents, setDocuments] = useState([])
@@ -1503,6 +1060,7 @@ function App() {
   const [loadError, setLoadError] = useState('')
   const [theme, toggleTheme] = useTheme()
   const [showShortcuts, setShowShortcuts] = useState(false)
+  const [sessionNotice, setSessionNotice] = useState('')
   const { toasts, push: pushToast } = useToasts()
 
   async function refreshDocuments() {
@@ -1511,6 +1069,10 @@ function App() {
 
   async function initialize(currentUser) {
     setUser(currentUser)
+    setSessionNotice('')
+    // Every other endpoint answers 403 until the agent chooses their own password,
+    // so loading the workspace now would only produce errors.
+    if (currentUser.must_change_password) return
     try {
       const [loadedDocuments, loadedSystem, loadedConversations] = await Promise.all([
         request('/documents'),
@@ -1607,6 +1169,23 @@ function App() {
     request('/auth/me').then(initialize).catch(() => undefined)
   }, [])
 
+  // A session can be closed from elsewhere: a password changed on another machine,
+  // an administrator revoking it. The next request answers 401; without this the
+  // interface would stay on screen, failing on every click.
+  useEffect(() => {
+    function onSessionLost(event) {
+      setUser(null)
+      setDocuments([])
+      setConversations([])
+      setActiveConversation(null)
+      setMessages([])
+      setStreaming(null)
+      setSessionNotice(event.detail || 'Votre session a été fermée. Reconnectez-vous.')
+    }
+    window.addEventListener('ansi:session-lost', onSessionLost)
+    return () => window.removeEventListener('ansi:session-lost', onSessionLost)
+  }, [])
+
   useShortcuts({
     enabled: Boolean(user),
     onSection: (index) => {
@@ -1622,7 +1201,11 @@ function App() {
     onToggleHelp: (next) => setShowShortcuts((current) => (next === false ? false : !current)),
   })
 
-  if (!user) return <Login onLogin={initialize} theme={theme} onToggleTheme={toggleTheme} />
+  if (!user) {
+    return (
+      <Login onLogin={initialize} theme={theme} onToggleTheme={toggleTheme} initialNotice={sessionNotice} />
+    )
+  }
 
   async function logout() {
     await request('/auth/logout', { method: 'POST' })
@@ -1633,6 +1216,10 @@ function App() {
     setMessages([])
     setStreaming(null)
     setTab('overview')
+  }
+
+  if (user.must_change_password) {
+    return <ForcedPasswordChange user={user} onDone={initialize} onLogout={logout} />
   }
 
   const visibleTabs = TABS.filter((item) => !item.admin || user.role === 'admin')
@@ -1710,7 +1297,7 @@ function App() {
         {tab === 'documents' && (
           <DocumentsView user={user} documents={documents} onRefresh={refreshDocuments} onToast={pushToast} />
         )}
-        {tab === 'users' && <UsersView user={user} onToast={pushToast} />}
+        {tab === 'users' && <Users user={user} onToast={pushToast} />}
         {tab === 'profile' && <Profile user={user} onToast={pushToast} />}
         {tab === 'admin' && (
           <Administration

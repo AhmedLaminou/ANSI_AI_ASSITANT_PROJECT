@@ -277,9 +277,7 @@ def test_omitted_fields_are_left_alone(people):
 # Sign-in by address or by username
 # --------------------------------------------------------------------------
 
-def test_sign_in_works_with_either_the_address_or_the_username():
-    """Accounts predating the email column sign in by username; newer ones by
-    address. Both must keep working without inventing an address for the old ones."""
+def test_an_account_with_an_address_signs_in_with_it_whatever_the_case():
     run = uuid.uuid4().hex[:8]
     username, email = f"double-{run}", f"double.{run}@ansi.ne"
     with SessionLocal() as db:
@@ -288,11 +286,56 @@ def test_sign_in_works_with_either_the_address_or_the_username():
         db.commit()
         account_id = db.scalar(select(User.id).where(User.username == username))
     try:
-        for identifier in (username, email, email.upper()):
+        for identifier in (email, email.upper()):
             with TestClient(app) as client:
                 assert client.post(
                     "/auth/login", json={"username": identifier, "password": PASSWORD}
                 ).status_code == 204, identifier
+    finally:
+        with SessionLocal() as db:
+            db.execute(delete(AuditEvent).where(AuditEvent.actor_id == account_id))
+            db.execute(delete(User).where(User.id == account_id))
+            db.commit()
+
+
+def test_once_an_address_is_recorded_the_username_no_longer_signs_in():
+    """One account, one credential: the address. Keeping the username alive beside it
+    would leave two identifiers for the same account and make a reset request, which
+    is filed by address, ambiguous about what it covers."""
+    run = uuid.uuid4().hex[:8]
+    username, email = f"ancien-{run}", f"ancien.{run}@ansi.ne"
+    with SessionLocal() as db:
+        db.add(User(username=username, email=email, password_hash=password_hash.hash(PASSWORD),
+                    role="user", department="rh", status="active"))
+        db.commit()
+        account_id = db.scalar(select(User.id).where(User.username == username))
+    try:
+        with TestClient(app) as client:
+            refused = client.post("/auth/login", json={"username": username, "password": PASSWORD})
+        # The same generic answer as a wrong password: no oracle.
+        assert refused.status_code == 401
+    finally:
+        with SessionLocal() as db:
+            db.execute(delete(AuditEvent).where(AuditEvent.actor_id == account_id))
+            db.execute(delete(User).where(User.id == account_id))
+            db.commit()
+
+
+def test_an_account_without_an_address_still_signs_in_by_username():
+    """The transition: no migration invents an address for an existing agent, so an
+    account that has none keeps working until an administrator records one."""
+    run = uuid.uuid4().hex[:8]
+    username = f"sansadresse-{run}"
+    with SessionLocal() as db:
+        db.add(User(username=username, email=None, password_hash=password_hash.hash(PASSWORD),
+                    role="user", department="rh", status="active"))
+        db.commit()
+        account_id = db.scalar(select(User.id).where(User.username == username))
+    try:
+        with TestClient(app) as client:
+            assert client.post(
+                "/auth/login", json={"username": username, "password": PASSWORD}
+            ).status_code == 204
     finally:
         with SessionLocal() as db:
             db.execute(delete(AuditEvent).where(AuditEvent.actor_id == account_id))

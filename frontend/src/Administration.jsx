@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
-import { DEPARTMENTS, Icon, departmentLabel, formatDate, request } from './shared.jsx'
+import { Icon, formatDate, request } from './shared.jsx'
 
 const SECTIONS = [
   { id: 'supervision', label: 'Supervision', icon: 'grid' },
@@ -89,7 +89,7 @@ function readSignals(overview) {
   return signals
 }
 
-function Supervision({ overview, onToast }) {
+function Supervision({ overview }) {
   if (!overview) return <p className="muted">Chargement…</p>
   const signals = readSignals(overview)
   const activity = Object.entries(overview.activity_7d).sort((a, b) => b[1] - a[1])
@@ -377,7 +377,7 @@ export default function Administration({ user, section, onSection, onToast }) {
         ))}
       </div>
       <div className="admin-panel">
-        {section === 'supervision' && <Supervision overview={overview} onToast={onToast} />}
+        {section === 'supervision' && <Supervision overview={overview} />}
         {section === 'journal' && <Journal onToast={onToast} />}
         {section === 'retours' && <Retours onToast={onToast} />}
       </div>
