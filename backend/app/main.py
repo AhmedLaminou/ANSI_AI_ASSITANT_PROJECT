@@ -1238,7 +1238,8 @@ async def build_chat_context(
         "think": False,
         "messages": [{"role": "system", "content": system_message(user)}, *recent_history, {
             "role": "user",
-            "content": f"Question : {question}\n\nExtraits autorisés :\n\n" + "\n\n".join(source_blocks),
+            "content": f"Question : {question}\n\nExtraits autorisés :\n\n" + "\n\n".join(source_blocks)
+            + ("\n\n/no_think" if settings.ollama_chat_no_think else ""),
         }],
         "options": {"num_ctx": 4096, "temperature": 0.15},
         "keep_alive": "10m",

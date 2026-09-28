@@ -68,6 +68,12 @@ def main() -> None:
         help="Tentatives de recherche. 1 desactive la reformulation, 2 l'active.",
     )
     parser.add_argument(
+        "--no-think",
+        action="store_true",
+        help="Ajoute le commutateur /no_think. Sans effet sur qwen3:4b, qui raisonne toujours : "
+             "pour comparer sans raisonnement, --model qwen3:4b-instruct-2507-q4_K_M.",
+    )
+    parser.add_argument(
         "--department",
         help=f"N'evalue qu'un service : {', '.join(sorted(DEPARTMENTS))}, ou {ADMIN}. "
              "Utile pour une mesure rapide apres un changement cible.",
@@ -79,6 +85,8 @@ def main() -> None:
         settings.ollama_chat_model = arguments.model
     if arguments.attempts:
         settings.max_retrieval_attempts = arguments.attempts
+    if arguments.no_think:
+        settings.ollama_chat_no_think = True
     # The rate limit guards interactive users; a batch harness would trip it on a fast model.
     settings.chat_rate_limit_per_minute = 0
 
@@ -204,7 +212,8 @@ def main() -> None:
         latencies = sorted(row["seconds"] for row in results)
 
         print("=" * 68)
-        print(f"Modele             : {settings.ollama_chat_model}")
+        print(f"Modele             : {settings.ollama_chat_model}"
+              + ("  (commutateur /no_think)" if settings.ollama_chat_no_think else ""))
         print(f"Tentatives         : {settings.max_retrieval_attempts} "
               f"({'reformulation active' if settings.max_retrieval_attempts > 1 else 'reformulation desactivee'})")
         print("-" * 68)

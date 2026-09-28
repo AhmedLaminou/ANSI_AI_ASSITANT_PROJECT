@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     ollama_embedding_model: str = "embeddinggemma"
     # qwen3 emits reasoning before its answer; the stream hides it until </think>.
     ollama_chat_reasoning: bool = True
+    # Appends qwen3's "/no_think" soft switch to the prompt. It only works on the hybrid
+    # Qwen3 models. Measured without effect on qwen3:4b, which is Qwen3-4B-Thinking-2507
+    # and always reasons (ARCHITECTURE_TECHNIQUE §5.8): the lever there is the model.
+    ollama_chat_no_think: bool = False
     document_max_upload_mb: int = 20
     # Months until a newly imported document is due for review by its owner.
     # 0 imports documents with no review date at all.
