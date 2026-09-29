@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -34,6 +34,7 @@ from .access import (
     can_access_document,
     department_label,
 )
+from .browse import FORMATS, MAX_PAGE_SIZE, SORTS, STATUSES, BrowseQuery, browse, is_expired
 from .config import get_settings
 from .glossary import expand_for
 from .graph import build_assistant_graph
@@ -401,6 +402,11 @@ FIELD_LABELS: dict[str, str] = {
     "comment": "Le commentaire",
     "classification": "La classification",
     "allowed_roles": "Les rôles autorisés",
+    "page": "Le numéro de page",
+    "size": "Le nombre de documents par page",
+    "q": "La recherche",
+    "offset": "Le décalage",
+    "ids": "La liste de documents",
 }
 
 
@@ -425,6 +431,10 @@ def explain_validation_error(error: dict[str, object]) -> str:
             return ("L'identifiant ne peut contenir que des lettres non accentuées, des chiffres, "
                     "et les signes « . » « - » « _ » — ni espace, ni accent.")
         return f"{field} contient des caractères non autorisés."
+    if kind == "greater_than_equal":
+        return f"{field} doit valoir au moins {context.get('ge', '?')}."
+    if kind == "less_than_equal":
+        return f"{field} ne peut pas dépasser {context.get('le', '?')}."
     return f"{field} est invalide."
 
 
@@ -466,10 +476,6 @@ def document_summary(document: DocumentRecord) -> dict[str, object]:
         "review_due": as_utc(document.review_due).isoformat() if document.review_due else None,
         "review_status": review_status(document),
     }
-
-
-def is_expired(document: DocumentRecord) -> bool:
-    return bool(document.valid_until and as_utc(document.valid_until) < datetime.now(timezone.utc))
 
 
 def parse_valid_until(raw: str) -> datetime | None:
@@ -837,6 +843,53 @@ def list_documents(
     return [with_owner(document, names) for document in documents]
 
 
+@app.get("/documents/page")
+def browse_documents(
+    page: int = Query(1, ge=1),
+    size: int = Query(10, ge=1, le=MAX_PAGE_SIZE),
+    q: str = Query("", max_length=200),
+    department: str = "",
+    classification: str = "",
+    file_format: str = Query("", alias="format"),
+    status_filter: str = Query("", alias="status"),
+    sort: str = "recent",
+    superseded: bool = False,
+    ids: str = Query("", max_length=4000),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """One page of the library, with search, filters, sort and facet counts.
+
+    `GET /documents` keeps returning everything for the callers that need it — the
+    probes and the tests; no screen calls it any more. This one is for browsing: it
+    never sends more than a page, and its counts only ever cover documents the
+    account may read.
+    """
+    if sort not in SORTS:
+        raise HTTPException(status_code=422, detail=f"Tri inconnu. Valeurs acceptées : {', '.join(SORTS)}.")
+    if status_filter and status_filter not in STATUSES:
+        raise HTTPException(status_code=422, detail=f"Statut inconnu. Valeurs acceptées : {', '.join(STATUSES)}.")
+    if file_format and file_format not in FORMATS:
+        raise HTTPException(status_code=422, detail=f"Format inconnu. Valeurs acceptées : {', '.join(FORMATS)}.")
+    try:
+        wanted = {int(part) for part in ids.split(",") if part.strip()} if ids.strip() else None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="La liste de documents doit contenir des numéros.") from None
+
+    query = select(DocumentRecord)
+    if not superseded:
+        query = query.where(DocumentRecord.is_current.is_(True))
+    readable = [document for document in db.scalars(query).all() if can_access_document(user, document)]
+    names = owner_names(db, readable)
+    return browse(
+        readable,
+        BrowseQuery(page=page, size=size, q=q, department=department, classification=classification,
+                    format=file_format, status=status_filter, sort=sort, ids=wanted, owner_names=names),
+        user,
+        lambda document: with_owner(document, names),
+    )
+
+
 @app.get("/documents/{document_id}/preview")
 def preview_document(
     document_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
@@ -847,9 +900,14 @@ def preview_document(
     chunks = db.scalars(
         select(DocumentChunk).where(DocumentChunk.document_id == document.id).order_by(DocumentChunk.ordinal).limit(8)
     ).all()
+    indexed = db.scalar(
+        select(func.count()).select_from(DocumentChunk).where(DocumentChunk.document_id == document.id)
+    ) or 0
     return {
-        "document": document_summary(document),
+        # with_owner: the details panel names who answers for the document.
+        "document": with_owner(document, owner_names(db, [document])),
         "chunks": [{"page": chunk.page_number, "content": chunk.content} for chunk in chunks],
+        "chunks_total": indexed,
     }
 
 
@@ -1531,22 +1589,26 @@ def list_audit_events(
     _: User = Depends(require_roles("admin")),
     db: Session = Depends(get_db),
     limit: int = 100,
+    offset: int = Query(0, ge=0),
     event_type: str | None = None,
     actor_id: int | None = None,
 ) -> dict[str, object]:
     """The audit trail, newest first, with the actor and document resolved.
 
     Filters are applied in SQL rather than after the fact, so a narrow filter over a
-    long history stays cheap.
+    long history stays cheap. `offset` pages through it; `matching` counts what the
+    filters select, where `total` counts the whole journal.
     """
     limit = max(1, min(limit, 500))
-    query = select(AuditEvent).order_by(AuditEvent.id.desc())
+    conditions = []
     if event_type:
         # Prefix match so "tool_invoked" catches "tool_invoked:count_users".
-        query = query.where(AuditEvent.event_type.startswith(event_type))
+        conditions.append(AuditEvent.event_type.startswith(event_type))
     if actor_id is not None:
-        query = query.where(AuditEvent.actor_id == actor_id)
-    events = db.scalars(query.limit(limit)).all()
+        conditions.append(AuditEvent.actor_id == actor_id)
+    query = select(AuditEvent).where(*conditions).order_by(AuditEvent.id.desc())
+    events = db.scalars(query.offset(offset).limit(limit)).all()
+    matching = db.scalar(select(func.count()).select_from(AuditEvent).where(*conditions)) or 0
 
     actors = {
         account.id: account
@@ -1560,6 +1622,8 @@ def list_audit_events(
 
     return {
         "total": db.scalar(select(func.count()).select_from(AuditEvent)) or 0,
+        "matching": matching,
+        "offset": offset,
         "kinds": sorted({event.event_type.split(":", 1)[0] for event in events}),
         "events": [
             {

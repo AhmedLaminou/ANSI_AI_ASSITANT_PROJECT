@@ -114,7 +114,7 @@ describe('accounts', () => {
   it('says how many accounts still sign in without an address', async () => {
     scriptFetch(adminRoutes())
     render(<Users user={ADMIN} onToast={() => undefined} />)
-    expect(await screen.findByText(/1 compte\(s\) sans adresse professionnelle/)).toBeTruthy()
+    expect(await screen.findByText(/1 compte sans adresse professionnelle/)).toBeTruthy()
   })
 
   it('has no accessibility violation', async () => {

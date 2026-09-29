@@ -28,6 +28,24 @@ export function scriptFetch(routes) {
   return calls
 }
 
+/** A page of the library as GET /documents/page returns it. */
+export function libraryPage(items, extra = {}) {
+  const department = {}
+  for (const item of items) department[item.department] = (department[item.department] ?? 0) + 1
+  return {
+    items,
+    total: items.length,
+    page: 1,
+    size: 10,
+    pages: 1,
+    first: items.length ? 1 : 0,
+    last: items.length,
+    readable_total: items.length,
+    facets: { department, classification: {}, format: {}, status: {} },
+    ...extra,
+  }
+}
+
 export async function accessibilityViolations(container) {
   const result = await axe.run(container, {
     rules: { 'color-contrast': { enabled: false } },

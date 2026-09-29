@@ -1,28 +1,34 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 
-import Administration, { ReviewBadge } from './Administration.jsx'
+import Administration from './Administration.jsx'
+import { DocumentDrawer, DocumentsView } from './Documents.jsx'
 import { ValidatedAnswerEditor } from './Knowledge.jsx'
 import { ForcedPasswordChange, Login } from './Login.jsx'
 import Profile from './Profile.jsx'
 import Users from './Users.jsx'
 import { useRoute } from './routing.js'
-import {
-  CLASSIFICATIONS,
-  DOCUMENT_DEPARTMENTS,
-  Icon,
-  ROLES,
-  request,
-  streamChat,
-} from './shared.jsx'
+import { DOCUMENT_DEPARTMENTS, Icon, request, roleLabel, streamChat } from './shared.jsx'
+import { Bar, EmptyState, FormatBadge, SearchInput, StatCard, countOf, timeAgo, useFavorites } from './ui.jsx'
 
 const TABS = [
-  { id: 'overview', label: "Vue d'ensemble", icon: 'grid' },
-  { id: 'chat', label: 'Assistant', icon: 'chat' },
-  { id: 'documents', label: 'Documents', icon: 'folder' },
-  { id: 'users', label: 'Utilisateurs', icon: 'users', admin: true },
-  { id: 'admin', label: 'Administration', icon: 'shield', admin: true },
+  { id: 'overview', label: 'Accueil', icon: 'grid', group: 'ESPACE' },
+  { id: 'chat', label: 'Assistant', icon: 'chat', group: 'ESPACE' },
+  { id: 'documents', label: 'Documents', icon: 'folder', group: 'ESPACE' },
+  { id: 'users', label: 'Comptes', icon: 'users', admin: true, group: 'ADMINISTRATION' },
+  { id: 'admin', label: 'Supervision', icon: 'shield', admin: true, group: 'ADMINISTRATION' },
 ]
+
+const ADMIN_SECTION_LABELS = {
+  supervision: 'Supervision',
+  lacunes: 'Lacunes du corpus',
+  reponses: 'Réponses validées',
+  contacts: 'Contacts',
+  journal: "Journal d'audit",
+  retours: 'Retours',
+}
+
+const EMPTY_LIBRARY = { total: 0, readable_total: 0, items: [], facets: { department: {} } }
 
 function getInitialTheme() {
   try {
@@ -161,10 +167,14 @@ async function copyToClipboard(text) {
   document.body.removeChild(helper)
 }
 
-/** Keyboard navigation. Alt+1..4 switch section, Ctrl/Cmd+K focuses the question
- * field, "?" opens the shortcut list. Alt is used rather than Ctrl for sections
- * so browser tab-switching keeps working. */
-function useShortcuts({ onSection, onFocusComposer, onToggleHelp, enabled }) {
+function fold(text) {
+  return text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+}
+
+/** Keyboard navigation. Alt+1..5 switch section, Ctrl/Cmd+K focuses the question
+ * field, "/" the document search, "?" opens the shortcut list. Alt is used rather
+ * than Ctrl for sections so browser tab-switching keeps working. */
+function useShortcuts({ onSection, onFocusComposer, onFocusSearch, onToggleHelp, enabled }) {
   useEffect(() => {
     if (!enabled) return undefined
     function handle(event) {
@@ -174,9 +184,14 @@ function useShortcuts({ onSection, onFocusComposer, onToggleHelp, enabled }) {
         onFocusComposer()
         return
       }
-      if (event.altKey && ['1', '2', '3', '4'].includes(event.key)) {
+      if (event.altKey && ['1', '2', '3', '4', '5'].includes(event.key)) {
         event.preventDefault()
         onSection(Number(event.key) - 1)
+        return
+      }
+      if (event.key === '/' && !typing) {
+        event.preventDefault()
+        onFocusSearch()
         return
       }
       if (event.key === '?' && !typing) {
@@ -187,13 +202,14 @@ function useShortcuts({ onSection, onFocusComposer, onToggleHelp, enabled }) {
     }
     window.addEventListener('keydown', handle)
     return () => window.removeEventListener('keydown', handle)
-  }, [enabled, onSection, onFocusComposer, onToggleHelp])
+  }, [enabled, onSection, onFocusComposer, onFocusSearch, onToggleHelp])
 }
 
 function ShortcutHelp({ open, onClose }) {
   if (!open) return null
   const rows = [
-    ['Alt + 1 … 4', 'Changer de section'],
+    ['Alt + 1 … 5', 'Changer de section'],
+    ['/', 'Rechercher un document'],
     ['Ctrl / Cmd + K', 'Aller au champ de question'],
     ['Entrée', 'Envoyer la question'],
     ['Maj + Entrée', 'Saut de ligne'],
@@ -232,86 +248,181 @@ function ShortcutHelp({ open, onClose }) {
 }
 
 // ---------------------------------------------------------------------------
-// Screens
+// Shell
 // ---------------------------------------------------------------------------
 
-function Overview({ documents, system, user, onNavigate }) {
+function TopBar({ trail, system, searchRef, onSearch, showSearch }) {
+  const [text, setText] = useState('')
   const ready = system?.chat_model_ready && system?.embedding_model_ready
   return (
+    <header className="top-bar">
+      <nav className="breadcrumb" aria-label="Fil d'Ariane">
+        <ol>
+          {trail.map((item, index) => (
+            <li key={item} aria-current={index === trail.length - 1 ? 'page' : undefined}>{item}</li>
+          ))}
+        </ol>
+      </nav>
+      {showSearch && (
+        <SearchInput
+          ref={searchRef}
+          className="global-search"
+          value={text}
+          onChange={setText}
+          onSubmit={() => {
+            if (!text.trim()) return
+            onSearch(text.trim())
+            setText('')
+          }}
+          label="Rechercher un document"
+          placeholder="Rechercher un document…"
+          hint="/"
+        />
+      )}
+      <span className={`status-pill ${ready ? 'ready' : 'warning'}`} title={ready ? `${system.chat_model} + ${system.embedding_model}` : 'Ollama ou un modèle ne répond pas'}>
+        <span className="status-dot" aria-hidden="true" />
+        {ready ? 'IA locale disponible' : system ? 'IA locale indisponible' : 'Vérification…'}
+      </span>
+    </header>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Home
+// ---------------------------------------------------------------------------
+
+export function Overview({ user, system, library, onNavigate, onOpenDocument }) {
+  const [profile, setProfile] = useState(null)
+  useEffect(() => {
+    request('/auth/profile').then(setProfile).catch(() => setProfile(null))
+  }, [])
+
+  const ready = system?.chat_model_ready && system?.embedding_model_ready
+  const hour = new Date().getHours()
+  const greeting = hour < 18 ? 'Bonjour' : 'Bonsoir'
+  const today = new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+  const services = DOCUMENT_DEPARTMENTS
+    .map((item) => ({ ...item, count: library.facets?.department?.[item.value] ?? 0 }))
+    .filter((item) => item.count > 0)
+  const largest = Math.max(1, ...services.map((item) => item.count))
+
+  return (
     <section className="workspace overview">
-      <div className="page-intro">
-        <div>
-          <p className="overline">ESPACE DE TRAVAIL</p>
-          <h1>Bonjour, {user.username}.</h1>
-          <p>Interrogez les informations documentées, avec une réponse traçable et limitée à vos autorisations.</p>
+      <div className="hero">
+        <div className="hero-text">
+          <p className="overline">{today.toUpperCase()}</p>
+          <h1>{greeting}, {user.username}.</h1>
+          <p>
+            Interrogez les documents de l'agence : chaque réponse cite ses sources, et ne porte que sur ce
+            que votre compte a le droit de lire.
+          </p>
+          <div className="hero-actions">
+            <button type="button" className="primary" onClick={() => onNavigate('chat')}>
+              <Icon name="chat" /> Poser une question
+            </button>
+            <button type="button" className="ghost-button" onClick={() => onNavigate('documents', null, { mode: 'contenu' })}>
+              <Icon name="search" /> Chercher dans les documents
+            </button>
+          </div>
         </div>
-        <div className={`readiness ${ready ? 'ready' : 'warning'}`}>
-          <Icon name={ready ? 'check' : 'spark'} />
+        <div className={`readiness-card ${ready ? 'ready' : 'warning'}`}>
+          <span className="readiness-icon" aria-hidden="true"><Icon name={ready ? 'check' : 'alert'} /></span>
           <div>
             <strong>{ready ? 'Services locaux disponibles' : 'Vérification requise'}</strong>
-            <small>{ready ? `${system.chat_model} + ${system.embedding_model}` : 'Ollama ou un modèle est indisponible'}</small>
+            <small>{ready ? `${system.chat_model} · ${system.embedding_model}` : 'Ollama ou un modèle est indisponible'}</small>
+            <small>Aucune donnée ne quitte le serveur.</small>
           </div>
         </div>
       </div>
-      <div className="metric-grid">
-        <article>
-          <span className="metric-icon"><Icon name="folder" /></span>
-          <p>Documents accessibles</p>
-          <strong>{documents.length}</strong>
-          <button onClick={() => onNavigate('documents')}>Consulter la base →</button>
+
+      <div className="stat-grid">
+        <StatCard icon="folder" label="Documents lisibles" value={(library.readable_total ?? library.total).toLocaleString('fr-FR')}
+                  onClick={() => onNavigate('documents')} />
+        <StatCard icon="chat" label="Conversations" value={profile ? profile.activity.conversations : '—'}
+                  onClick={() => onNavigate('chat')} />
+        <StatCard icon="spark" label="Questions posées" value={profile ? profile.activity.questions : '—'} />
+        <StatCard icon="lock" label="Exécution de l'IA" value="Locale" hint="Aucune API externe" tone="accent" />
+      </div>
+
+      <div className="overview-grid">
+        <article className="panel">
+          <div className="panel-head">
+            <h2 className="block-title">Derniers documents</h2>
+            <button type="button" className="text-button" onClick={() => onNavigate('documents')}>
+              Toute la bibliothèque <Icon name="arrow-right" />
+            </button>
+          </div>
+          {library.items.length ? (
+            <ul className="recent-docs">
+              {library.items.slice(0, 5).map((document) => (
+                <li key={document.id}>
+                  <button type="button" onClick={() => onOpenDocument(document.id)}>
+                    <FormatBadge filename={document.filename} />
+                    <span className="recent-doc-text">
+                      <strong>{document.title}</strong>
+                      <small>{document.department_label} · {timeAgo(document.created_at)}</small>
+                    </span>
+                    <Icon name="arrow-right" className="recent-doc-go" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState icon="folder" title="Aucun document accessible">
+              Un administrateur ou gestionnaire documentaire doit importer un document de votre service.
+            </EmptyState>
+          )}
         </article>
-        <article>
-          <span className="metric-icon"><Icon name="doc-text" /></span>
-          <p>Réponses avec sources</p>
-          <strong>RAG</strong>
-          <small>Documents + pages citées</small>
-        </article>
-        <article>
-          <span className="metric-icon"><Icon name="shield" /></span>
-          <p>Exécution IA</p>
-          <strong>Locale</strong>
-          <small>Aucune API IA externe</small>
+
+        <article className="panel">
+          <div className="panel-head">
+            <h2 className="block-title">Par service</h2>
+          </div>
+          {services.length ? (
+            <ul className="service-bars">
+              {services.map((item) => (
+                <li key={item.value}>
+                  <button type="button" onClick={() => onNavigate('documents', null, { service: item.value })}>
+                    <span className="service-name">{item.label}</span>
+                    <Bar value={item.count} max={largest} tone={`dept ${item.value}`} />
+                    <strong>{item.count}</strong>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">Aucun document pour l'instant.</p>
+          )}
         </article>
       </div>
-      <div className="two-column">
-        <article className="info-card">
-          <p className="overline">COMMENT UTILISER L'ASSISTANT</p>
-          <h2>Une réponse utile est une réponse vérifiable.</h2>
-          <ol>
-            <li>Importez un document autorisé depuis la base documentaire.</li>
-            <li>Attribuez les rôles qui peuvent le consulter.</li>
-            <li>Posez une question précise dans l'Assistant.</li>
-            <li>Vérifiez les documents et pages affichés sous la réponse.</li>
-          </ol>
-          <button className="primary" onClick={() => onNavigate('chat')}>
-            Ouvrir l'assistant →
-          </button>
-        </article>
-        <article className="info-card tinted">
+
+      <div className="overview-grid">
+        <article className="panel tinted">
           <p className="overline">GARANTIES DE L'ASSISTANT</p>
           <ul className="check-list">
-            <li>
-              <Icon name="check" />
-              Une source indisponible doit produire un refus, pas une invention.
-            </li>
-            <li>
-              <Icon name="check" />
-              Rôle et service filtrent les documents avant la recherche, dans le code.
-            </li>
-            <li>
-              <Icon name="check" />
-              Les PDF scannés sont reconnus localement, sans service en ligne.
-            </li>
-            <li>
-              <Icon name="check" />
-              Toute réponse administrative importante reste validée par un agent.
-            </li>
+            <li><Icon name="check" />Une source indisponible produit un refus, jamais une invention.</li>
+            <li><Icon name="check" />Rôle et service filtrent les documents avant la recherche, dans le code.</li>
+            <li><Icon name="check" />Les PDF scannés sont lus sur place, sans service en ligne.</li>
+            <li><Icon name="check" />Une réponse administrative importante reste validée par un agent.</li>
           </ul>
+        </article>
+        <article className="panel">
+          <p className="overline">BIEN POSER UNE QUESTION</p>
+          <ol className="tips">
+            <li>Une question précise : « délai de préavis d'un agent titulaire » plutôt que « préavis ».</li>
+            <li>Vérifiez la source citée sous la réponse : un clic l'ouvre.</li>
+            <li>Une question qui suit la précédente peut rester courte : « et pour un stagiaire ? ».</li>
+          </ol>
+          <p className="muted small">Raccourcis : <kbd>/</kbd> rechercher un document, <kbd>?</kbd> toute l'aide clavier.</p>
         </article>
       </div>
     </section>
   )
 }
+
+// ---------------------------------------------------------------------------
+// Assistant
+// ---------------------------------------------------------------------------
 
 function ConversationRow({ conversation, isActive, onSelect, onRename, onDelete }) {
   const [editing, setEditing] = useState(false)
@@ -342,6 +453,7 @@ function ConversationRow({ conversation, isActive, onSelect, onRename, onDelete 
           className="conversation-rename"
           value={value}
           maxLength={160}
+          aria-label="Nouveau titre de la conversation"
           onChange={(event) => setValue(event.target.value)}
           onBlur={commit}
           onKeyDown={(event) => {
@@ -379,19 +491,35 @@ function answerForValidation(content) {
     .trim()
 }
 
+function SourcePill({ source, onOpenDocument }) {
+  const label = `${source.id} · ${source.title} · p. ${source.page}${source.is_expired ? ' · PÉRIMÉ' : ''}`
+  if (!source.document_id) {
+    return <span className={`source-pill ${source.is_expired ? 'expired' : ''}`}>{label}</span>
+  }
+  return (
+    <button type="button" className={`source-pill ${source.is_expired ? 'expired' : ''}`}
+            title="Ouvrir le document" onClick={() => onOpenDocument(source.document_id)}>
+      <Icon name="doc-text" /> {label}
+    </button>
+  )
+}
+
 function ChatView({
   user,
-  documents,
+  library,
   system,
   conversations,
   activeConversation,
   messages,
   streaming,
+  draft,
+  onDraftUsed,
   onNewConversation,
   onSelectConversation,
   onRenameConversation,
   onDeleteConversation,
   onSend,
+  onOpenDocument,
   onToast,
 }) {
   const [message, setMessage] = useState('')
@@ -401,7 +529,25 @@ function ChatView({
   const [results, setResults] = useState(null)
   const [rated, setRated] = useState({})
   const [publishing, setPublishing] = useState(null)
+  const [filter, setFilter] = useState('')
+  const composer = useRef(null)
   const ready = system?.chat_model_ready && system?.embedding_model_ready
+  const available = library.readable_total ?? library.total
+
+  useEffect(() => {
+    if (!draft) return
+    setMode('assistant')
+    setMessage(draft)
+    onDraftUsed()
+    window.requestAnimationFrame(() => {
+      composer.current?.focus()
+      composer.current?.setSelectionRange(draft.length, draft.length)
+    })
+  }, [draft, onDraftUsed])
+
+  const shownConversations = filter
+    ? conversations.filter((conversation) => fold(conversation.title).includes(fold(filter)))
+    : conversations
 
   async function submit(event) {
     event.preventDefault()
@@ -464,16 +610,25 @@ function ChatView({
           onToast={onToast}
         />
       )}
-      <aside className="conversation-sidebar">
+      <aside className="conversation-sidebar" aria-label="Conversations">
         <button className="new-conversation" onClick={onNewConversation}>
           <Icon name="plus" /> Nouvelle conversation
         </button>
+        {conversations.length > 4 && (
+          <div className="conversation-filter">
+            <Icon name="search" />
+            <input value={filter} onChange={(event) => setFilter(event.target.value)}
+                   placeholder="Filtrer les conversations…" aria-label="Filtrer les conversations" />
+          </div>
+        )}
         <p className="conversation-label">VOS CONVERSATIONS</p>
         <div className="conversation-list">
           {conversations.length === 0 ? (
             <p className="empty-list">Vos échanges documentaires apparaîtront ici.</p>
+          ) : shownConversations.length === 0 ? (
+            <p className="empty-list">Aucune conversation ne correspond.</p>
           ) : (
-            conversations.map((conversation) => (
+            shownConversations.map((conversation) => (
               <ConversationRow
                 key={conversation.id}
                 conversation={conversation}
@@ -500,7 +655,7 @@ function ChatView({
             {ready ? '● IA locale disponible' : '! Vérifier Ollama'}
           </span>
         </header>
-        {documents.length === 0 ? (
+        {available === 0 ? (
           <div className="empty-state">
             <div className="empty-icon"><Icon name="folder" /></div>
             <h3>Aucun document accessible</h3>
@@ -518,17 +673,16 @@ function ChatView({
                 </p>
                 <div className="corpus">
                   <p className="corpus-label">
-                    {documents.length} document{documents.length > 1 ? 's' : ''} interrogeable
-                    {documents.length > 1 ? 's' : ''} par votre compte
+                    {available} document{available > 1 ? 's' : ''} interrogeable{available > 1 ? 's' : ''} par votre compte
                   </p>
                   <div className="corpus-items">
-                    {documents.slice(0, 6).map((document) => (
-                      <span className="corpus-item" key={document.id}>
+                    {library.items.slice(0, 6).map((document) => (
+                      <button type="button" className="corpus-item" key={document.id} onClick={() => onOpenDocument(document.id)}>
                         <Icon name="doc-text" />
                         {document.title}
-                      </span>
+                      </button>
                     ))}
-                    {documents.length > 6 && <span className="corpus-item more">+ {documents.length - 6} autres</span>}
+                    {available > 6 && <span className="corpus-item more">+ {available - 6} autres</span>}
                   </div>
                 </div>
                 <div className="suggestions">
@@ -577,10 +731,7 @@ function ChatView({
                   {entry.sources?.length > 0 && (
                     <div className="source-list">
                       {entry.sources.map((source) => (
-                        <span className={`source-pill ${source.is_expired ? 'expired' : ''}`} key={source.id}>
-                          {source.id} · {source.title} · p. {source.page}
-                          {source.is_expired && ' · PÉRIMÉ'}
-                        </span>
+                        <SourcePill key={source.id} source={source} onOpenDocument={onOpenDocument} />
                       ))}
                     </div>
                   )}
@@ -633,9 +784,7 @@ function ChatView({
                 {streaming.sources?.length > 0 && (
                   <div className="source-list">
                     {streaming.sources.map((source) => (
-                      <span className="source-pill" key={source.id}>
-                        {source.id} · {source.title} · p. {source.page}
-                      </span>
+                      <SourcePill key={source.id} source={source} onOpenDocument={onOpenDocument} />
                     ))}
                   </div>
                 )}
@@ -655,13 +804,14 @@ function ChatView({
               <p className="empty-list">Aucun passage correspondant dans vos documents autorisés.</p>
             ) : (
               results.items.map((item, index) => (
-                <article className="search-hit" key={`${item.document_id}-${item.page}-${index}`}>
-                  <div className="search-hit-head">
+                <button type="button" className="search-hit" key={`${item.document_id}-${item.page}-${index}`}
+                        onClick={() => onOpenDocument(item.document_id)}>
+                  <span className="search-hit-head">
                     <strong>{item.title}</strong>
                     <span className="search-score">p. {item.page} · {Math.round(item.score * 100)}%</span>
-                  </div>
-                  <p>{item.excerpt}…</p>
-                </article>
+                  </span>
+                  <span className="search-hit-text">{item.excerpt}…</span>
+                </button>
               ))
             )}
           </div>
@@ -671,16 +821,19 @@ function ChatView({
             <button
               type="button"
               className={mode === 'assistant' ? 'active' : ''}
+              aria-pressed={mode === 'assistant'}
               onClick={() => setMode('assistant')}
             >
               <Icon name="chat" /> Assistant
             </button>
-            <button type="button" className={mode === 'search' ? 'active' : ''} onClick={() => setMode('search')}>
+            <button type="button" className={mode === 'search' ? 'active' : ''} aria-pressed={mode === 'search'}
+                    onClick={() => setMode('search')}>
               <Icon name="search" /> Recherche rapide
             </button>
           </div>
           <div className="composer-input">
             <textarea
+              ref={composer}
               value={message}
               onChange={(event) => setMessage(event.target.value)}
               onKeyDown={(event) => {
@@ -691,8 +844,9 @@ function ChatView({
               }}
               rows="3"
               maxLength="4000"
-              placeholder={documents.length ? 'Posez une question précise sur les documents autorisés…' : 'Aucun document accessible…'}
-              disabled={!documents.length || busy}
+              aria-label="Votre question"
+              placeholder={available ? 'Posez une question précise sur les documents autorisés…' : 'Aucun document accessible…'}
+              disabled={!available || busy}
             />
             <span className="char-count">{message.length}/4000</span>
           </div>
@@ -701,9 +855,9 @@ function ChatView({
             <span>
               {mode === 'search'
                 ? 'Recherche seule : retrouve les passages, sans rédiger de réponse — quelques secondes.'
-                : `${documents.length} document${documents.length > 1 ? 's' : ''} accessible${documents.length > 1 ? 's' : ''} · Entrée pour envoyer, Maj+Entrée pour un saut de ligne`}
+                : `${available} document${available > 1 ? 's' : ''} accessible${available > 1 ? 's' : ''} · Entrée pour envoyer, Maj+Entrée pour un saut de ligne`}
             </span>
-            <button className="primary" disabled={!documents.length || busy}>
+            <button className="primary" disabled={!available || busy}>
               <Icon name={mode === 'search' ? 'search' : 'send'} />{' '}
               {busy ? (mode === 'search' ? 'Recherche…' : 'Analyse locale…') : mode === 'search' ? 'Rechercher' : 'Envoyer'}
             </button>
@@ -714,532 +868,64 @@ function ChatView({
   )
 }
 
-function DocumentPreview({ preview, onClose }) {
-  if (!preview) return null
+/** The document panel opened from outside the library: a cited source, the home page. */
+function StandaloneDrawer({ user, documentId, onClose, onChanged, onAsk, onToast }) {
+  const favorites = useFavorites(user.id)
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section
-        className="preview-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="preview-title"
-        onMouseDown={(event) => event.stopPropagation()}
-        onKeyDown={(event) => event.key === 'Escape' && onClose()}
-      >
-        <header>
-          <div>
-            <p className="overline">APERÇU AUTORISÉ</p>
-            <h2 id="preview-title">{preview.document.title}</h2>
-            <p>{preview.document.filename}</p>
-          </div>
-          <button className="modal-close" onClick={onClose} aria-label="Fermer l'aperçu" autoFocus>
-            <Icon name="close" />
-          </button>
-        </header>
-        <div className="preview-content">
-          {preview.chunks.map((chunk, index) => (
-            <article key={`${chunk.page}-${index}`}>
-              <span>Page {chunk.page}</span>
-              <p>{chunk.content}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-    </div>
+    <DocumentDrawer documentId={documentId} user={user} favorites={favorites} onClose={onClose}
+                    onChanged={onChanged} onAsk={onAsk} onToast={onToast} />
   )
 }
 
-/** Le périmètre d'un document se révise : une note classée « interne » ne concerne
- * finalement qu'un service, ou un service est réorganisé. Avant, la seule façon de
- * le changer était de supprimer et réimporter — ce qui perd l'historique des
- * versions et coûte une réindexation complète. */
-function ScopeEditor({ document, onClose, onSaved, onToast }) {
-  const [owners, setOwners] = useState([])
-  const [ownerId, setOwnerId] = useState(document.owner_id ?? '')
-  const [reviewDue, setReviewDue] = useState(document.review_due ? document.review_due.slice(0, 10) : '')
-
-  useEffect(() => {
-    // A reader cannot answer for a document: the owner must be able to replace it.
-    request('/admin/users')
-      .then((accounts) => setOwners(accounts.filter(
-        (account) => account.is_active && ['admin', 'document_manager'].includes(account.role),
-      )))
-      .catch(() => setOwners([]))
-  }, [])
-  const [classification, setClassification] = useState(document.classification)
-  const [department, setDepartment] = useState(document.department)
-  const [roles, setRoles] = useState(document.allowed_roles)
-  const [title, setTitle] = useState(document.title)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-
-  function toggleRole(role) {
-    setRoles((current) =>
-      current.includes(role) ? current.filter((item) => item !== role) : [...current, role],
-    )
-  }
-
-  async function submit(event) {
-    event.preventDefault()
-    setError('')
-    setBusy(true)
-    try {
-      await request(`/documents/${document.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title,
-          classification,
-          department,
-          allowed_roles: roles.join(','),
-          review_due: reviewDue,
-          ...(ownerId ? { owner_id: Number(ownerId) } : {}),
-        }),
-      })
-      onToast(`Périmètre de « ${title} » mis à jour.`, 'success')
-      onSaved()
-      onClose()
-    } catch (requestError) {
-      setError(requestError.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal scope-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="scope-title"
-        onClick={(event) => event.stopPropagation()}
-        onKeyDown={(event) => event.key === 'Escape' && onClose()}
-      >
-      <form className="modal-form" onSubmit={submit}>
-        <div className="modal-head">
-          <h2 id="scope-title" className="block-title">Modifier le périmètre</h2>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Fermer">
-            <Icon name="close" />
-          </button>
-        </div>
-        <p className="muted">
-          Ces champs décident qui peut lire le document. Le changement prend effet immédiatement,
-          sans réindexation : le contenu n'est pas touché.
-        </p>
-        <label>
-          Titre
-          <input value={title} onChange={(event) => setTitle(event.target.value)} required autoFocus />
-        </label>
-        <label>
-          Service
-          <select value={department} onChange={(event) => setDepartment(event.target.value)}>
-            {DOCUMENT_DEPARTMENTS.map((item) => (
-              <option key={item.value} value={item.value}>{item.label}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Classification
-          <select value={classification} onChange={(event) => setClassification(event.target.value)}>
-            {CLASSIFICATIONS.map((value) => <option key={value}>{value}</option>)}
-          </select>
-          <span className="field-hint">
-            Indicative seulement : ce sont les rôles ci-dessous qui filtrent réellement.
-          </span>
-        </label>
-        <label>
-          Responsable
-          <select value={ownerId} onChange={(event) => setOwnerId(event.target.value)}>
-            {!document.owner_id && <option value="">Aucun</option>}
-            {owners.map((account) => (
-              <option key={account.id} value={account.id}>
-                {account.username} ({account.role})
-              </option>
-            ))}
-          </select>
-          <span className="field-hint">C'est à lui que la révision est demandée.</span>
-        </label>
-        <label>
-          À réviser le
-          <input type="date" value={reviewDue} onChange={(event) => setReviewDue(event.target.value)} />
-          <span className="field-hint">Vide : aucune révision planifiée.</span>
-        </label>
-        <fieldset className="role-grid">
-          <legend>Rôles autorisés</legend>
-          {ROLES.map((role) => (
-            <label key={role} className="checkbox">
-              <input
-                type="checkbox"
-                checked={roles.includes(role)}
-                disabled={role === 'admin'}
-                onChange={() => toggleRole(role)}
-              />
-              {role}
-              {role === 'admin' && <span className="field-hint">toujours autorisé</span>}
-            </label>
-          ))}
-        </fieldset>
-        {error && <p className="error">{error}</p>}
-        <div className="modal-actions">
-          <button type="button" className="text-button" onClick={onClose}>Annuler</button>
-          <button className="primary" disabled={busy}>{busy ? 'Enregistrement…' : 'Enregistrer'}</button>
-        </div>
-      </form>
-      </div>
-    </div>
-  )
-}
-
-export function DocumentsView({ user, documents, onRefresh, onToast }) {
-  // Several files go through the batch endpoint, each titled after its filename; a
-  // single file keeps the title field. Importing a corpus one form at a time does not
-  // happen, so the batch path is the one that matters for real use.
-  const [files, setFiles] = useState([])
-  const file = files.length === 1 ? files[0] : null
-  const [reviewDue, setReviewDue] = useState('')
-  const [batchReport, setBatchReport] = useState(null)
-  const [title, setTitle] = useState('')
-  const [classification, setClassification] = useState('interne')
-  const [department, setDepartment] = useState('transverse')
-  const [validUntil, setValidUntil] = useState('')
-  const [allowedRoles, setAllowedRoles] = useState(['admin', 'document_manager', 'user'])
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState('all')
-  const [preview, setPreview] = useState(null)
-  const [editing, setEditing] = useState(null)
-  const [showSuperseded, setShowSuperseded] = useState(false)
-  const [departmentFilter, setDepartmentFilter] = useState('all')
-  const [withHistory, setWithHistory] = useState(null)
-  const canManage = user.role === 'admin' || user.role === 'document_manager'
-
-  useEffect(() => {
-    if (!showSuperseded) return
-    request('/documents?include_superseded=true')
-      .then(setWithHistory)
-      .catch((requestError) => onToast(requestError.message, 'error'))
-  }, [showSuperseded, documents, onToast])
-
-  const listed = showSuperseded ? withHistory ?? documents : documents
-  const filteredDocuments = useMemo(
-    () =>
-      listed.filter(
-        (document) =>
-          (filter === 'all' || document.classification === filter) &&
-          (departmentFilter === 'all' || document.department === departmentFilter) &&
-          `${document.title} ${document.filename}`.toLowerCase().includes(query.toLowerCase()),
-      ),
-    [listed, filter, departmentFilter, query],
-  )
-
-  function toggleRole(role) {
-    setAllowedRoles((current) => (current.includes(role) ? current.filter((value) => value !== role) : [...current, role]))
-  }
-
-  async function submit(event) {
-    event.preventDefault()
-    if (!files.length) return setError('Sélectionnez au moins un document.')
-    if (!allowedRoles.length) return setError('Choisissez au moins un rôle autorisé.')
-    setBusy(true)
-    setError('')
-    setBatchReport(null)
-    const form = new FormData()
-    form.append('classification', classification)
-    form.append('allowed_roles', allowedRoles.join(','))
-    form.append('valid_until', validUntil)
-    form.append('review_due', reviewDue)
-    form.append('department', department)
-    try {
-      if (file) {
-        form.append('file', file)
-        form.append('title', title || file.name.replace(/\.[^.]+$/, ''))
-        const uploaded = await request('/documents/upload', { method: 'POST', body: form })
-        onToast(`« ${uploaded.title} » importé et indexé (${uploaded.chunks_indexed} extraits).`, 'success')
-      } else {
-        files.forEach((item) => form.append('files', item))
-        const report = await request('/documents/upload-batch', { method: 'POST', body: form })
-        setBatchReport(report)
-        onToast(`${report.imported} document(s) importé(s), ${report.failed} échec(s).`,
-                report.failed ? 'error' : 'success')
-      }
-      setFiles([])
-      setTitle('')
-      setValidUntil('')
-      setReviewDue('')
-      await onRefresh()
-    } catch (requestError) {
-      setError(requestError.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function showPreview(id) {
-    try {
-      setPreview(await request(`/documents/${id}/preview`))
-    } catch (requestError) {
-      onToast(requestError.message, 'error')
-    }
-  }
-
-  async function removeDocument(id, name) {
-    if (!window.confirm('Supprimer ce document et son index local ?')) return
-    try {
-      await request(`/documents/${id}`, { method: 'DELETE' })
-      await onRefresh()
-      onToast(`« ${name} » supprimé.`, 'success')
-    } catch (requestError) {
-      onToast(requestError.message, 'error')
-    }
-  }
-
-  return (
-    <section className="workspace">
-      <div className="workspace-head">
-        <div>
-          <p className="overline">BASE DOCUMENTAIRE</p>
-          <h1>Documents et droits d'accès</h1>
-          <p>Les autorisations sont appliquées avant la recherche sémantique.</p>
-        </div>
-        <span className="count-badge">
-          {documents.length} indexé{documents.length > 1 ? 's' : ''}
-        </span>
-      </div>
-      {canManage && (
-        <form className="upload-card" onSubmit={submit}>
-          <div className="upload-header">
-            <div>
-              <h2 className="block-title">Importer un document</h2>
-              <p>
-                Le texte est conservé localement, découpé puis indexé par <strong>embeddinggemma</strong>.
-              </p>
-            </div>
-            <span>PDF · DOCX · TXT · MD</span>
-          </div>
-          <div className="form-grid">
-            <label>
-              Titre du document
-              <input
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                placeholder={files.length > 1 ? 'Chaque document prend le nom de son fichier' : 'Ex. Rapport trimestriel'}
-                disabled={files.length > 1}
-              />
-            </label>
-            <label>
-              Service concerné
-              <select value={department} onChange={(event) => setDepartment(event.target.value)}>
-                {DOCUMENT_DEPARTMENTS.map((item) => (
-                  <option key={item.value} value={item.value}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Classification
-              <select value={classification} onChange={(event) => setClassification(event.target.value)}>
-                <option value="interne">Interne</option>
-                <option value="direction">Direction</option>
-                <option value="confidentiel">Confidentiel</option>
-              </select>
-            </label>
-            <label className="file-input">
-              Fichier(s)
-              <input
-                type="file"
-                multiple
-                accept=".pdf,.docx,.txt,.md"
-                onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
-              />
-              {files.length === 0 && <span>Choisir un ou plusieurs fichiers</span>}
-              {files.length === 1 && <span>{files[0].name}</span>}
-              {files.length > 1 && <span>{files.length} fichiers sélectionnés</span>}
-            </label>
-            <label>
-              Valide jusqu'au <span className="field-hint">(facultatif)</span>
-              <input type="date" value={validUntil} onChange={(event) => setValidUntil(event.target.value)} />
-            </label>
-            <label>
-              À réviser le <span className="field-hint">(par défaut : dans douze mois)</span>
-              <input type="date" value={reviewDue} onChange={(event) => setReviewDue(event.target.value)} />
-            </label>
-          </div>
-          <fieldset>
-            <legend>Rôles autorisés</legend>
-            {ROLES.map((role) => (
-              <label className="role-check" key={role}>
-                <input type="checkbox" checked={allowedRoles.includes(role)} onChange={() => toggleRole(role)} />
-                {role}
-              </label>
-            ))}
-          </fieldset>
-          <p className="field-hint">
-            Vous devenez responsable des documents importés : c'est à vous que la révision sera
-            demandée. Pour un dossier entier, l'import depuis le serveur (app.import_folder) est plus adapté.
-          </p>
-          {error && (
-            <p className="error" role="alert">
-              {error}
-            </p>
-          )}
-          <button className="primary" disabled={busy}>
-            <Icon name="upload" />{' '}
-            {busy
-              ? 'Indexation locale…'
-              : files.length > 1
-                ? `Importer ${files.length} documents`
-                : 'Importer et indexer'}
-          </button>
-          {batchReport && (
-            <ul className="batch-report" aria-label="Résultat de l'import">
-              {batchReport.results.map((row) => (
-                <li key={row.filename} className={row.status}>
-                  <Icon name={row.status === 'ok' ? 'check' : 'close'} />
-                  <strong>{row.filename}</strong>
-                  <span>{row.status === 'ok' ? `importé${row.version > 1 ? ` (version ${row.version})` : ''}` : row.detail}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </form>
-      )}
-      <div className="document-toolbar">
-        <div className="search-field">
-          <Icon name="search" />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Rechercher un titre ou fichier…" />
-        </div>
-        <select value={filter} onChange={(event) => setFilter(event.target.value)} aria-label="Filtrer par classification">
-          <option value="all">Toutes classifications</option>
-          {CLASSIFICATIONS.map((value) => (
-            <option key={value} value={value}>
-              {value[0].toUpperCase() + value.slice(1)}
-            </option>
-          ))}
-        </select>
-        <select value={departmentFilter} onChange={(event) => setDepartmentFilter(event.target.value)} aria-label="Filtrer par service">
-          <option value="all">Tous les services</option>
-          {DOCUMENT_DEPARTMENTS.map((item) => (
-            <option key={item.value} value={item.value}>
-              {item.label}
-            </option>
-          ))}
-        </select>
-        <label className="toggle-field" title="Les versions remplacées ne sont plus interrogées par l'assistant">
-          <input
-            type="checkbox"
-            checked={showSuperseded}
-            onChange={(event) => {
-              setShowSuperseded(event.target.checked)
-              if (!event.target.checked) setWithHistory(null)
-            }}
-          />
-          Versions remplacées
-        </label>
-      </div>
-      <h2 className="visually-hidden">Liste des documents</h2>
-      <div className="document-list">
-        {filteredDocuments.length === 0 ? (
-          <div className="empty-state compact">
-            <h3>{documents.length ? 'Aucun résultat' : 'La base est vide'}</h3>
-            <p>
-              {documents.length
-                ? 'Modifiez votre recherche ou votre filtre.'
-                : "Importez les procédures du service pour que ses agents puissent les interroger."}
-            </p>
-          </div>
-        ) : (
-          filteredDocuments.map((document) => (
-            <article
-              className={`document-card ${document.is_current ? '' : 'superseded'} ${document.is_expired ? 'expired' : ''}`}
-              key={document.id}
-            >
-              <div className="document-symbol">
-                <Icon name="doc-text" />
-              </div>
-              <div className="document-meta">
-                <h3>
-                  {document.title}
-                  {document.version > 1 && <span className="version-badge">v{document.version}</span>}
-                  {!document.is_current && <span className="version-badge muted">remplacée</span>}
-                  {document.is_expired && <span className="version-badge danger">périmée</span>}
-                </h3>
-                <p>{document.filename}</p>
-                <div className="tags">
-                  <span className={`tag-department ${document.department}`}>{document.department_label}</span>
-                  {canManage && document.review_status !== 'ok' && (
-                    <ReviewBadge status={document.review_status} due={document.review_due} />
-                  )}
-                  {canManage && (
-                    <span className={document.owner ? '' : 'tag-department none'}>
-                      {document.owner ? `responsable : ${document.owner}` : 'sans responsable'}
-                    </span>
-                  )}
-                  <span className={`tag-classification ${document.classification}`}>{document.classification}</span>
-                  {document.allowed_roles.map((role) => (
-                    <span key={role}>{role}</span>
-                  ))}
-                </div>
-              </div>
-              <button className="text-button" onClick={() => showPreview(document.id)}>
-                <Icon name="eye" /> Aperçu
-              </button>
-              {user.role === 'admin' && (
-                <>
-                  <button className="text-button" onClick={() => setEditing(document)}>
-                    <Icon name="pencil" /> Périmètre
-                  </button>
-                  <button
-                    className="icon-button"
-                    title="Supprimer"
-                    aria-label={`Supprimer le document « ${document.title} »`}
-                    onClick={() => removeDocument(document.id, document.title)}
-                  >
-                    <Icon name="trash" />
-                  </button>
-                </>
-              )}
-            </article>
-          ))
-        )}
-      </div>
-      <DocumentPreview preview={preview} onClose={() => setPreview(null)} />
-      {editing && (
-        <ScopeEditor
-          document={editing}
-          onClose={() => setEditing(null)}
-          onSaved={onRefresh}
-          onToast={onToast}
-        />
-      )}
-    </section>
-  )
-}
+// ---------------------------------------------------------------------------
+// Application
+// ---------------------------------------------------------------------------
 
 function App() {
   const [user, setUser] = useState(null)
-  const [documents, setDocuments] = useState([])
+  // Until /auth/me answers, nobody knows whether a session exists: showing the sign-in
+  // form meanwhile made it flash on every page load for agents already signed in.
+  const [checkingSession, setCheckingSession] = useState(true)
+  const [library, setLibrary] = useState(EMPTY_LIBRARY)
   const [system, setSystem] = useState(null)
   const [conversations, setConversations] = useState([])
   const [activeConversation, setActiveConversation] = useState(null)
   const [messages, setMessages] = useState([])
   const [streaming, setStreaming] = useState(null)
+  const [attention, setAttention] = useState({})
+  const [openDocument, setOpenDocument] = useState(null)
+  const [draft, setDraft] = useState('')
   // The section lives in the URL, so /administration/retours is a real address
-  // an administrator can bookmark or share.
-  const [route, navigate] = useRoute()
+  // an administrator can bookmark or share — and so does a filtered library.
+  const [route, navigate, setQuery] = useRoute()
   const tab = route.tab
-  const setTab = navigate
   const [loadError, setLoadError] = useState('')
   const [theme, toggleTheme] = useTheme()
   const [showShortcuts, setShowShortcuts] = useState(false)
   const [sessionNotice, setSessionNotice] = useState('')
   const { toasts, push: pushToast } = useToasts()
+  const globalSearch = useRef(null)
 
-  async function refreshDocuments() {
-    setDocuments(await request('/documents'))
-  }
+  const refreshLibrary = useCallback(async () => {
+    try {
+      setLibrary(await request('/documents/page?size=6'))
+    } catch (requestError) {
+      pushToast(requestError.message, 'error')
+    }
+  }, [pushToast])
+
+  const refreshAttention = useCallback(async (account) => {
+    if (account?.role !== 'admin') return
+    try {
+      const overview = await request('/admin/overview')
+      setAttention({
+        users: (overview.accounts.pending ?? 0) + (overview.accounts.password_resets_pending ?? 0),
+        admin: overview.gaps?.unanswered ?? 0,
+      })
+    } catch {
+      setAttention({})
+    }
+  }, [])
 
   async function initialize(currentUser) {
     setUser(currentUser)
@@ -1248,24 +934,30 @@ function App() {
     // so loading the workspace now would only produce errors.
     if (currentUser.must_change_password) return
     try {
-      const [loadedDocuments, loadedSystem, loadedConversations] = await Promise.all([
-        request('/documents'),
+      const [loadedLibrary, loadedSystem, loadedConversations] = await Promise.all([
+        request('/documents/page?size=6'),
         request('/system/status'),
         request('/conversations'),
       ])
-      setDocuments(loadedDocuments)
+      setLibrary(loadedLibrary)
       setSystem(loadedSystem)
       setConversations(loadedConversations)
+      refreshAttention(currentUser)
     } catch (requestError) {
       setLoadError(requestError.message)
     }
   }
 
+  // The badges in the navigation follow what the administrator just handled.
+  useEffect(() => {
+    if (user) refreshAttention(user)
+  }, [tab, user, refreshAttention])
+
   async function selectConversation(id) {
     const response = await request(`/conversations/${id}/messages`)
     setActiveConversation(response.conversation)
     setMessages(response.messages)
-    setTab('chat')
+    navigate('chat')
   }
 
   async function newConversation() {
@@ -1273,7 +965,7 @@ function App() {
     setConversations((current) => [conversation, ...current])
     setActiveConversation(conversation)
     setMessages([])
-    setTab('chat')
+    navigate('chat')
   }
 
   async function renameConversation(id, title) {
@@ -1339,8 +1031,22 @@ function App() {
     setMessages((current) => [...current, { id: messageId, role: 'assistant', content: answer.trim(), sources }])
   }
 
+  const askAbout = useCallback((document) => {
+    setOpenDocument(null)
+    setDraft(`À propos du document « ${document.title} » : `)
+    navigate('chat')
+  }, [navigate])
+
+  const clearDraft = useCallback(() => setDraft(''), [])
+  const closeDocument = useCallback(() => setOpenDocument(null), [])
+
   useEffect(() => {
-    request('/auth/me').then(initialize).catch(() => undefined)
+    request('/auth/me')
+      .then(initialize)
+      .catch(() => undefined)
+      .finally(() => setCheckingSession(false))
+    // Once, on load: initialize() is not a dependency that changes meaning.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // A session can be closed from elsewhere: a password changed on another machine,
@@ -1349,31 +1055,50 @@ function App() {
   useEffect(() => {
     function onSessionLost(event) {
       setUser(null)
-      setDocuments([])
+      setLibrary(EMPTY_LIBRARY)
       setConversations([])
       setActiveConversation(null)
       setMessages([])
       setStreaming(null)
+      setOpenDocument(null)
       setSessionNotice(event.detail || 'Votre session a été fermée. Reconnectez-vous.')
     }
     window.addEventListener('ansi:session-lost', onSessionLost)
     return () => window.removeEventListener('ansi:session-lost', onSessionLost)
   }, [])
 
+  const focusSearch = useCallback(() => {
+    if (tab === 'documents') {
+      document.querySelector('.library-search input')?.focus()
+    } else {
+      globalSearch.current?.focus()
+    }
+  }, [tab])
+
   useShortcuts({
     enabled: Boolean(user),
     onSection: (index) => {
       const available = TABS.filter((item) => !item.admin || user?.role === 'admin')
-      if (available[index]) setTab(available[index].id)
+      if (available[index]) navigate(available[index].id)
     },
     onFocusComposer: () => {
-      setTab('chat')
+      navigate('chat')
       // The composer belongs to ChatView; querying the DOM avoids threading a ref
       // through three components for a single focus call.
       window.requestAnimationFrame(() => document.querySelector('.composer textarea')?.focus())
     },
+    onFocusSearch: focusSearch,
     onToggleHelp: (next) => setShowShortcuts((current) => (next === false ? false : !current)),
   })
+
+  if (!user && checkingSession) {
+    return (
+      <main className="boot-screen" aria-busy="true">
+        <div className="brand-mark" aria-hidden="true">A</div>
+        <p role="status">Ouverture de votre espace…</p>
+      </main>
+    )
+  }
 
   if (!user) {
     return (
@@ -1384,12 +1109,13 @@ function App() {
   async function logout() {
     await request('/auth/logout', { method: 'POST' })
     setUser(null)
-    setDocuments([])
+    setLibrary(EMPTY_LIBRARY)
     setConversations([])
     setActiveConversation(null)
     setMessages([])
     setStreaming(null)
-    setTab('overview')
+    setOpenDocument(null)
+    navigate('overview')
   }
 
   if (user.must_change_password) {
@@ -1397,6 +1123,19 @@ function App() {
   }
 
   const visibleTabs = TABS.filter((item) => !item.admin || user.role === 'admin')
+  const groups = [...new Set(visibleTabs.map((item) => item.group))]
+  const trail = {
+    overview: ['Accueil'],
+    chat: ['Assistant'],
+    documents: ['Documents'],
+    users: ['Administration', 'Comptes'],
+    profile: ['Mon profil'],
+    admin: ['Administration', ADMIN_SECTION_LABELS[route.section ?? 'supervision'] ?? 'Supervision'],
+  }[tab] ?? ['Accueil']
+  const attentionTitle = {
+    users: (count) => `${countOf(count, 'demande')} en attente`,
+    admin: (count) => `${countOf(count, 'question')} sans réponse`,
+  }
 
   return (
     <main className="app-shell">
@@ -1406,28 +1145,45 @@ function App() {
           <div className="brand-mark">A</div>
           <div>
             <strong>ANSI</strong>
-            <span>Assistant local</span>
+            <span>Assistant documentaire</span>
           </div>
         </div>
-        <nav>
-          {visibleTabs.map((item, index) => (
-            <button
-              key={item.id}
-              className={tab === item.id ? 'active' : ''}
-              aria-current={tab === item.id ? 'page' : undefined}
-              onClick={() => navigate(item.id)}
-              title={`${item.label} (Alt+${index + 1})`}
-            >
-              <Icon name={item.icon} />
-              {item.label}
-              <span className="nav-key">Alt{index + 1}</span>
-            </button>
+        <nav aria-label="Sections">
+          {groups.map((group) => (
+            <div className="nav-group" key={group}>
+              <p className="nav-label">{group}</p>
+              {visibleTabs.filter((item) => item.group === group).map((item) => {
+                const index = visibleTabs.indexOf(item)
+                const count = attention[item.id]
+                return (
+                  <button
+                    key={item.id}
+                    className={tab === item.id ? 'active' : ''}
+                    aria-current={tab === item.id ? 'page' : undefined}
+                    onClick={() => navigate(item.id)}
+                    title={`${item.label} (Alt+${index + 1})`}
+                  >
+                    <Icon name={item.icon} />
+                    {item.label}
+                    {count > 0 ? (
+                      <span className="nav-badge" title={attentionTitle[item.id]?.(count)}>
+                        {count}
+                        <span className="visually-hidden"> — {attentionTitle[item.id]?.(count)}</span>
+                      </span>
+                    ) : (
+                      <span className="nav-key">Alt{index + 1}</span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
           ))}
         </nav>
         <div className="side-footer">
+          {/* On a phone the footer is one row: the labels stay for screen readers only. */}
           <button className="theme-toggle" onClick={toggleTheme} title="Changer de thème">
             <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
-            {theme === 'dark' ? 'Thème clair' : 'Thème sombre'}
+            <span className="side-label">{theme === 'dark' ? 'Thème clair' : 'Thème sombre'}</span>
           </button>
           <button
             className={`account${tab === 'profile' ? ' active' : ''}`}
@@ -1438,53 +1194,80 @@ function App() {
             <div>
               <strong>{user.username}</strong>
               <span>
-                {user.role} · {user.sees_every_department ? 'tous services' : user.department_label}
+                {roleLabel(user.role)} · {user.sees_every_department ? 'tous services' : user.department_label}
               </span>
             </div>
             <Icon name="pencil" className="account-go" />
           </button>
-          <button className="logout" onClick={() => setShowShortcuts(true)}>
+          <button className="logout shortcuts" onClick={() => setShowShortcuts(true)}>
             <Icon name="spark" /> Raccourcis clavier <span className="nav-key">?</span>
           </button>
-          <button className="logout" onClick={logout}>
-            <Icon name="logout" /> Déconnexion
+          <button className="logout" onClick={logout} title="Déconnexion">
+            <Icon name="logout" /> <span className="side-label">Déconnexion</span>
           </button>
         </div>
       </aside>
       <section className="main-content" id="contenu" tabIndex={-1}>
+        {tab !== 'chat' && (
+          <TopBar
+            trail={trail}
+            system={system}
+            searchRef={globalSearch}
+            showSearch={tab !== 'documents'}
+            onSearch={(text) => navigate('documents', null, { q: text })}
+          />
+        )}
         {loadError && <div className="notice">{loadError}</div>}
-        {tab === 'overview' && <Overview documents={documents} system={system} user={user} onNavigate={setTab} />}
+        {tab === 'overview' && (
+          <Overview user={user} system={system} library={library} onNavigate={navigate}
+                    onOpenDocument={setOpenDocument} />
+        )}
         {tab === 'chat' && (
           <ChatView
             user={user}
-            documents={documents}
+            library={library}
             system={system}
             conversations={conversations}
             activeConversation={activeConversation}
             messages={messages}
             streaming={streaming}
+            draft={draft}
+            onDraftUsed={clearDraft}
             onNewConversation={newConversation}
             onSelectConversation={selectConversation}
             onRenameConversation={renameConversation}
             onDeleteConversation={deleteConversation}
             onSend={sendMessage}
+            onOpenDocument={setOpenDocument}
             onToast={pushToast}
           />
         )}
         {tab === 'documents' && (
-          <DocumentsView user={user} documents={documents} onRefresh={refreshDocuments} onToast={pushToast} />
+          <DocumentsView
+            user={user}
+            query={route.query}
+            onQuery={setQuery}
+            onToast={pushToast}
+            onAsk={askAbout}
+            onLibraryChanged={refreshLibrary}
+          />
         )}
         {tab === 'users' && <Users user={user} onToast={pushToast} />}
-        {tab === 'profile' && <Profile user={user} onToast={pushToast} />}
+        {tab === 'profile' && <Profile user={user} onToast={pushToast} onNavigate={navigate} />}
         {tab === 'admin' && (
           <Administration
             user={user}
             section={route.section ?? 'supervision'}
             onSection={(section) => navigate('admin', section)}
+            onNavigate={navigate}
             onToast={pushToast}
           />
         )}
       </section>
+      {tab !== 'documents' && (
+        <StandaloneDrawer user={user} documentId={openDocument} onClose={closeDocument}
+                          onChanged={refreshLibrary} onAsk={askAbout} onToast={pushToast} />
+      )}
       <ShortcutHelp open={showShortcuts} onClose={() => setShowShortcuts(false)} />
       <ToastStack toasts={toasts} />
     </main>

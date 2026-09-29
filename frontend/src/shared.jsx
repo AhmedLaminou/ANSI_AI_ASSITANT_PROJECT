@@ -10,6 +10,14 @@ import { cloneElement, useId } from 'react'
 export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 export const ROLES = ['admin', 'document_manager', 'user']
+// What a role is called on screen. The identifiers stay those of the API, which
+// the CSV exports keep too: a spreadsheet is filtered on values that never change.
+const ROLE_LABELS = { admin: 'Administrateur', document_manager: 'Gestionnaire documentaire', user: 'Agent' }
+
+export function roleLabel(value) {
+  return ROLE_LABELS[value] ?? value
+}
+
 export const CLASSIFICATIONS = ['interne', 'direction', 'confidentiel']
 
 // Mirrors backend/app/access.py. "transverse" is not a department: it is the

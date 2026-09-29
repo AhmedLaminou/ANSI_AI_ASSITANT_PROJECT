@@ -5,13 +5,14 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import Administration from '../src/Administration.jsx'
-import { DocumentsView } from '../src/App.jsx'
+import { DocumentsView } from '../src/Documents.jsx'
 import Profile from '../src/Profile.jsx'
-import { accessibilityViolations, scriptFetch } from './helpers.js'
+import { accessibilityViolations, libraryPage, scriptFetch } from './helpers.js'
 
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  window.localStorage.clear()
 })
 
 const ADMIN = { id: 1, username: 'admin', role: 'admin', email: 'admin@ansi.ne', department: 'technique',
@@ -41,10 +42,10 @@ describe('supervision', () => {
   it('states what the figures imply', async () => {
     scriptFetch({ 'GET /admin/overview': { body: OVERVIEW } })
     render(<Administration user={ADMIN} section="supervision" onSection={() => undefined} onToast={() => undefined} />)
-    expect(await screen.findByText(/14 question\(s\) sans réponse/)).toBeTruthy()
-    expect(screen.getByText(/1 document\(s\) ont dépassé leur date de révision/)).toBeTruthy()
+    expect(await screen.findByText(/14 questions sans réponse/)).toBeTruthy()
+    expect(screen.getByText(/1 document a dépassé sa date de révision/)).toBeTruthy()
     expect(screen.getByText(/Aucun contact pour : Logistique/)).toBeTruthy()
-    expect(screen.getByText(/1 agent\(s\) attendent un mot de passe provisoire/)).toBeTruthy()
+    expect(screen.getByText(/1 agent attend un mot de passe provisoire/)).toBeTruthy()
     expect(screen.getByText(/Durée de rétention non fixée/)).toBeTruthy()
   })
 
@@ -53,7 +54,7 @@ describe('supervision', () => {
     const { container } = render(
       <Administration user={ADMIN} section="supervision" onSection={() => undefined} onToast={() => undefined} />,
     )
-    await screen.findByText(/14 question\(s\)/)
+    await screen.findByText(/14 questions/)
     expect(await accessibilityViolations(container)).toEqual([])
   })
 
@@ -70,7 +71,7 @@ describe('supervision', () => {
       <Administration user={ADMIN} section="lacunes" onSection={() => undefined} onToast={() => undefined} />,
     )
     expect(await screen.findByText('Politique de covoiturage ?')).toBeTruthy()
-    expect(screen.getByLabelText('3 demande(s)')).toBeTruthy()
+    expect(screen.getByLabelText('3 demandes')).toBeTruthy()
     expect(await accessibilityViolations(container)).toEqual([])
   })
 })
@@ -84,17 +85,16 @@ describe('documents', () => {
   }]
 
   it('has no accessibility violation', async () => {
-    scriptFetch({})
-    const { container } = render(
-      <DocumentsView user={ADMIN} documents={documents} onRefresh={() => undefined} onToast={() => undefined} />,
-    )
+    scriptFetch({ 'GET /documents/page': { body: libraryPage(documents) } })
+    const { container } = render(<DocumentsView user={ADMIN} onToast={() => undefined} />)
+    await screen.findByText('Procédure congés')
     expect(await accessibilityViolations(container)).toEqual([])
   })
 
-  it('shows a document nobody answers for', () => {
-    scriptFetch({})
-    render(<DocumentsView user={ADMIN} documents={documents} onRefresh={() => undefined} onToast={() => undefined} />)
-    expect(screen.getByText('sans responsable')).toBeTruthy()
+  it('shows a document nobody answers for', async () => {
+    scriptFetch({ 'GET /documents/page': { body: libraryPage(documents) } })
+    render(<DocumentsView user={ADMIN} onToast={() => undefined} />)
+    expect(await screen.findByText('sans responsable')).toBeTruthy()
   })
 })
 

@@ -4,12 +4,34 @@
  * service, not as a total. A corpus of 40 documents looks healthy until you notice
  * that 38 of them are transverse and the logistics service has none — which a
  * global figure hides completely. Every table here is therefore per perimeter, and
- * the gaps are stated rather than left to be inferred from a zero. */
+ * the gaps are stated rather than left to be inferred from a zero.
+ *
+ * Every signal leads somewhere: « 3 documents ont dépassé leur date de révision »
+ * comes with the button that opens exactly those three in the library. */
 
 import { useCallback, useEffect, useState } from 'react'
 
 import { Contacts, Gaps, ValidatedAnswers } from './Knowledge.jsx'
-import { Icon, formatDate, request } from './shared.jsx'
+import { Icon, formatDate, request, roleLabel } from './shared.jsx'
+import {
+  Bar,
+  EmptyState,
+  ListFooter,
+  PageHeader,
+  PageSizeSelect,
+  PageSummary,
+  Pagination,
+  ReviewBadge,
+  SectionNav,
+  SkeletonRows,
+  StatCard,
+  agree,
+  countOf,
+  downloadCsv,
+  useClientPages,
+} from './ui.jsx'
+
+export { ReviewBadge }
 
 const SECTIONS = [
   { id: 'supervision', label: 'Supervision', icon: 'grid' },
@@ -30,17 +52,33 @@ const AUDIT_FILTERS = [
   { value: 'login_failed', label: 'Connexions échouées' },
 ]
 
-function Figure({ label, value, hint, tone = '' }) {
-  return (
-    <div className={`figure ${tone}`}>
-      <span className="figure-value">{value}</span>
-      <span className="figure-label">{label}</span>
-      {hint && <span className="figure-hint">{hint}</span>}
-    </div>
-  )
+const ACTIVITY_LABELS = {
+  document_uploaded: 'Documents importés',
+  document_deleted: 'Documents supprimés',
+  document_scope_updated: 'Périmètres modifiés',
+  document_question_answered: 'Questions répondues',
+  validated_answer_served: 'Réponses validées servies',
+  validated_answer_created: 'Réponses validées publiées',
+  login_failed: 'Connexions échouées',
+  user_created: 'Comptes créés',
+  user_updated: 'Comptes modifiés',
+  registration_approved: 'Demandes accordées',
+  registration_refused: 'Demandes refusées',
+  password_reset_requested: 'Mots de passe oubliés',
+  user_password_reset: 'Mots de passe provisoires',
+  user_password_changed: 'Mots de passe changés',
+  sessions_revoked: 'Sessions fermées',
+  gap_resolved: 'Lacunes traitées',
+  contact_updated: 'Contacts modifiés',
 }
 
-/** What the figures mean operationally, said outright rather than left to inference. */
+function activityLabel(kind) {
+  const base = kind.split(':')[0]
+  return ACTIVITY_LABELS[base] ?? (base === 'tool_invoked' ? `Outil : ${kind.split(':')[1] ?? ''}` : base.replace(/_/g, ' '))
+}
+
+/** What the figures mean operationally, said outright rather than left to inference —
+ * each with the place where it is dealt with. */
 function readSignals(overview) {
   const signals = []
   const emptyServices = overview.departments.filter(
@@ -49,9 +87,10 @@ function readSignals(overview) {
   if (emptyServices.length) {
     signals.push({
       tone: 'warn',
-      text: `${emptyServices.length} service(s) sans aucun document : ${emptyServices
+      text: `${countOf(emptyServices.length, 'service')} sans aucun document : ${emptyServices
         .map((item) => item.label)
-        .join(', ')}. Leurs agents ne peuvent lire que les documents transverses.`,
+        .join(', ')}. ${agree(emptyServices.length, 'Ses', 'Leurs')} agents ne peuvent lire que les documents transverses.`,
+      action: { label: 'Importer des documents', go: ['documents'] },
     })
   }
   const staffedButEmpty = overview.departments.filter(
@@ -66,55 +105,64 @@ function readSignals(overview) {
   if (overview.accounts.unattached > 0) {
     signals.push({
       tone: 'warn',
-      text: `${overview.accounts.unattached} compte(s) actif(s) sans service. Ils ne lisent que les documents transverses — c'est presque toujours un oubli.`,
+      text: `${countOf(overview.accounts.unattached, 'compte actif', 'comptes actifs')} sans service. ${agree(overview.accounts.unattached, 'Il ne lit', 'Ils ne lisent')} que les documents transverses — c'est presque toujours un oubli.`,
+      action: { label: 'Voir les comptes', go: ['users'] },
     })
   }
   if (overview.accounts.pending > 0) {
     signals.push({
       tone: 'info',
-      text: `${overview.accounts.pending} demande(s) d'accès en attente de décision.`,
+      text: `${countOf(overview.accounts.pending, 'demande')} d'accès en attente de décision.`,
+      action: { label: 'Traiter les demandes', go: ['users'] },
     })
   }
   if (overview.documents.expired > 0) {
     signals.push({
       tone: 'warn',
-      text: `${overview.documents.expired} document(s) dépassent leur date de validité. Ils restent consultables et sont signalés comme périmés dans les réponses.`,
+      text: `${countOf(overview.documents.expired, 'document')} ${agree(overview.documents.expired, 'dépasse sa', 'dépassent leur')} date de validité. ${agree(overview.documents.expired, 'Il reste consultable et est signalé comme périmé', 'Ils restent consultables et sont signalés comme périmés')} dans les réponses.`,
+      action: { label: 'Voir les documents périmés', go: ['documents', null, { statut: 'expired' }] },
     })
   }
   if (overview.gaps?.unanswered > 0) {
     signals.push({
       tone: 'info',
-      text: `${overview.gaps.unanswered} question(s) sans réponse à examiner dans « Lacunes du corpus » : autant de documents manquants ou de mots que le corpus n'emploie pas.`,
+      text: `${countOf(overview.gaps.unanswered, 'question')} sans réponse à examiner dans « Lacunes du corpus » : autant de documents manquants ou de mots que le corpus n'emploie pas.`,
+      action: { label: 'Voir les lacunes', section: 'lacunes' },
     })
   }
   if (overview.reviews?.overdue > 0) {
     signals.push({
       tone: 'warn',
-      text: `${overview.reviews.overdue} document(s) ont dépassé leur date de révision. Leur responsable doit confirmer qu'ils sont toujours exacts.`,
+      text: `${countOf(overview.reviews.overdue, 'document')} ${agree(overview.reviews.overdue, 'a dépassé sa', 'ont dépassé leur')} date de révision. ${agree(overview.reviews.overdue, "Son responsable doit confirmer qu'il est toujours exact.", "Leurs responsables doivent confirmer qu'ils sont toujours exacts.")}`,
+      action: { label: 'Voir ces documents', go: ['documents', null, { statut: 'overdue' }] },
     })
   }
   if (overview.reviews?.without_owner > 0) {
     signals.push({
       tone: 'warn',
-      text: `${overview.reviews.without_owner} document(s) sans responsable. Un document dont personne ne répond n'est jamais révisé.`,
+      text: `${countOf(overview.reviews.without_owner, 'document')} sans responsable. Un document dont personne ne répond n'est jamais révisé.`,
+      action: { label: 'Voir ces documents', go: ['documents', null, { statut: 'unowned' }] },
     })
   }
   if (overview.contacts_missing?.length) {
     signals.push({
       tone: 'info',
       text: `Aucun contact pour : ${overview.contacts_missing.join(', ')}. Sans contact, un refus de l'assistant ne renvoie vers personne.`,
+      action: { label: 'Désigner un contact', section: 'contacts' },
     })
   }
   if (overview.accounts.without_email > 0) {
     signals.push({
       tone: 'info',
-      text: `${overview.accounts.without_email} compte(s) actif(s) sans adresse professionnelle : ils se connectent encore avec leur identifiant.`,
+      text: `${countOf(overview.accounts.without_email, 'compte actif', 'comptes actifs')} sans adresse professionnelle : ${agree(overview.accounts.without_email, 'il se connecte encore avec son identifiant', 'ils se connectent encore avec leur identifiant')}.`,
+      action: { label: 'Voir les comptes', go: ['users'] },
     })
   }
   if (overview.accounts.password_resets_pending > 0) {
     signals.push({
       tone: 'warn',
-      text: `${overview.accounts.password_resets_pending} agent(s) attendent un mot de passe provisoire (écran Utilisateurs).`,
+      text: `${countOf(overview.accounts.password_resets_pending, 'agent')} ${agree(overview.accounts.password_resets_pending, 'attend', 'attendent')} un mot de passe provisoire (écran Comptes).`,
+      action: { label: 'Traiter', go: ['users'] },
     })
   }
   if (overview.model.retention_days === 0) {
@@ -129,85 +177,107 @@ function readSignals(overview) {
   return signals
 }
 
-export function ReviewBadge({ status, due }) {
-  const label = {
-    overdue: 'dépassée',
-    due_soon: 'bientôt',
-    ok: 'à jour',
-    none: 'non planifiée',
-  }[status] ?? status
-  return (
-    <span className={`review-badge ${status}`}>
-      {label}
-      {due && ` · ${formatDate(due, false)}`}
-    </span>
-  )
-}
-
-function Supervision({ overview }) {
-  if (!overview) return <p className="muted">Chargement…</p>
+function Supervision({ overview, onNavigate, onSection }) {
+  if (!overview) return <SkeletonRows rows={6} />
   const signals = readSignals(overview)
   const activity = Object.entries(overview.activity_7d).sort((a, b) => b[1] - a[1])
+  const busiest = Math.max(1, ...activity.map(([, count]) => count))
+  const largest = Math.max(1, ...overview.departments.map((item) => item.documents))
+  const go = (action) => (action.section ? onSection(action.section) : onNavigate?.(...action.go))
 
   return (
     <>
-      <div className="figure-grid">
-        <Figure label="Documents indexés" value={overview.documents.total}
-                hint={`${overview.documents.chunks} extraits`} />
-        <Figure label="Comptes actifs" value={overview.accounts.active}
-                hint={`${overview.accounts.total} au total`} />
-        <Figure label="Demandes en attente" value={overview.accounts.pending}
-                tone={overview.accounts.pending ? 'warn' : ''} />
-        <Figure label="Réponses signalées" value={overview.feedback.wrong}
-                hint={`${overview.feedback.useful} jugées utiles`}
-                tone={overview.feedback.wrong ? 'warn' : ''} />
+      <div className="stat-grid six">
+        <StatCard icon="folder" label="Documents indexés" value={overview.documents.total}
+                  hint={`${overview.documents.chunks} extraits`} onClick={() => onNavigate?.('documents')} />
+        <StatCard icon="users" label="Comptes actifs" value={overview.accounts.active}
+                  hint={`${overview.accounts.total} au total`} onClick={() => onNavigate?.('users')} />
+        <StatCard icon="inbox" label="Demandes en attente" value={overview.accounts.pending}
+                  tone={overview.accounts.pending ? 'warn' : ''} onClick={() => onNavigate?.('users')} />
+        <StatCard icon="search" label="Questions sans réponse" value={overview.gaps?.unanswered ?? 0}
+                  tone={overview.gaps?.unanswered ? 'info' : ''} onClick={() => onSection('lacunes')} />
+        <StatCard icon="clock" label="Révisions dépassées" value={overview.reviews?.overdue ?? 0}
+                  tone={overview.reviews?.overdue ? 'danger' : ''}
+                  onClick={() => onNavigate?.('documents', null, { statut: 'overdue' })} />
+        <StatCard icon="chat" label="Réponses signalées" value={overview.feedback.wrong}
+                  hint={`${overview.feedback.useful} jugées utiles`}
+                  tone={overview.feedback.wrong ? 'warn' : ''} onClick={() => onSection('retours')} />
       </div>
 
-      <div className="signal-list">
-        {signals.map((signal, index) => (
-          <p key={index} className={`signal ${signal.tone}`}>
-            <Icon name={signal.tone === 'ok' ? 'check' : 'shield'} />
-            {signal.text}
-          </p>
-        ))}
-      </div>
+      <article className="panel">
+        <div className="panel-head">
+          <h2 className="block-title">Points d'attention</h2>
+          <span className="muted small">{signals.filter((signal) => signal.tone !== 'ok').length} à examiner</span>
+        </div>
+        <div className="signal-list">
+          {signals.map((signal, index) => (
+            <div key={index} className={`signal ${signal.tone}`}>
+              <Icon name={signal.tone === 'ok' ? 'check' : signal.tone === 'warn' ? 'alert' : 'info'} />
+              <p>{signal.text}</p>
+              {signal.action && (
+                <button type="button" className="signal-action" onClick={() => go(signal.action)}>
+                  {signal.action.label} <Icon name="arrow-right" />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </article>
 
-      <h2 className="block-title section-title">Répartition par service</h2>
-      <p className="muted">
-        Le cloisonnement se lit ici : un service sans document n'a rien à offrir à ses agents,
-        un service sans compte n'a personne pour l'interroger.
-      </p>
-      <div className="table-scroll">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Service</th>
-              <th>Documents</th>
-              <th>Extraits indexés</th>
-              <th>Comptes rattachés</th>
-              <th>Dernier import</th>
-            </tr>
-          </thead>
-          <tbody>
-            {overview.departments.map((item) => (
-              <tr key={item.value} className={item.documents === 0 && item.value !== 'transverse' ? 'row-warn' : ''}>
-                <td>
-                  <strong>{item.label}</strong>
-                  {item.value === 'transverse' && <span className="muted"> — lisible par tous</span>}
-                </td>
-                <td>{item.documents}</td>
-                <td>{item.chunks}</td>
-                <td>{item.accounts === null ? <span className="muted">s. o.</span> : item.accounts}</td>
-                <td>{formatDate(item.last_import, false)}</td>
+      <article className="panel">
+        <div className="panel-head">
+          <h2 className="block-title">Répartition par service</h2>
+        </div>
+        <p className="muted">
+          Le cloisonnement se lit ici : un service sans document n'a rien à offrir à ses agents,
+          un service sans compte n'a personne pour l'interroger.
+        </p>
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Service</th>
+                <th scope="col">Documents</th>
+                <th scope="col">Extraits indexés</th>
+                <th scope="col">Comptes rattachés</th>
+                <th scope="col">Dernier import</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {overview.departments.map((item) => (
+                <tr key={item.value} className={item.documents === 0 && item.value !== 'transverse' ? 'row-warn' : ''}>
+                  <td>
+                    <button type="button" className="cell-link"
+                            onClick={() => onNavigate?.('documents', null, { service: item.value })}>
+                      <strong>{item.label}</strong>
+                    </button>
+                    {item.value === 'transverse' && <span className="muted"> — lisible par tous</span>}
+                  </td>
+                  <td>
+                    <span className="bar-cell">
+                      <Bar value={item.documents} max={largest} tone={`dept ${item.value}`} />
+                      <strong>{item.documents}</strong>
+                    </span>
+                  </td>
+                  <td>{item.chunks.toLocaleString('fr-FR')}</td>
+                  <td>{item.accounts === null ? <span className="muted">s. o.</span> : item.accounts}</td>
+                  <td>{formatDate(item.last_import, false)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </article>
 
       {overview.reviews?.items.length > 0 && (
-        <>
-          <h2 className="block-title section-title">Documents à réviser</h2>
+        <article className="panel">
+          <div className="panel-head">
+            <h2 className="block-title">Documents à réviser</h2>
+            <button type="button" className="text-button"
+                    onClick={() => onNavigate?.('documents', null, { tri: 'review' })}>
+              Tout voir par date de révision <Icon name="arrow-right" />
+            </button>
+          </div>
           <p className="muted">
             Date de révision dépassée ou proche, responsable absent ou inactif. Distinct de la date
             de validité : la révision est le moment où quelqu'un vérifie que le texte est encore vrai.
@@ -216,10 +286,10 @@ function Supervision({ overview }) {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Document</th>
-                  <th>Service</th>
-                  <th>Responsable</th>
-                  <th>Révision</th>
+                  <th scope="col">Document</th>
+                  <th scope="col">Service</th>
+                  <th scope="col">Responsable</th>
+                  <th scope="col">Révision</th>
                 </tr>
               </thead>
               <tbody>
@@ -239,17 +309,18 @@ function Supervision({ overview }) {
               </tbody>
             </table>
           </div>
-        </>
+        </article>
       )}
 
       <div className="admin-columns">
-        <div>
-          <h2 className="block-title section-title">Activité des sept derniers jours</h2>
+        <article className="panel">
+          <h2 className="block-title">Activité des sept derniers jours</h2>
           {activity.length ? (
-            <ul className="stat-list">
+            <ul className="activity-bars">
               {activity.map(([kind, count]) => (
                 <li key={kind}>
-                  <span>{kind.replace(/_/g, ' ')}</span>
+                  <span>{activityLabel(kind)}</span>
+                  <Bar value={count} max={busiest} />
                   <strong>{count}</strong>
                 </li>
               ))}
@@ -257,9 +328,9 @@ function Supervision({ overview }) {
           ) : (
             <p className="muted">Aucune activité enregistrée sur la période.</p>
           )}
-        </div>
-        <div>
-          <h2 className="block-title section-title">Configuration en vigueur</h2>
+        </article>
+        <article className="panel">
+          <h2 className="block-title">Configuration en vigueur</h2>
           <ul className="stat-list">
             <li><span>Modèle de conversation</span><strong>{overview.model.chat}</strong></li>
             <li><span>Modèle d'embeddings</span><strong>{overview.model.embedding}</strong></li>
@@ -275,10 +346,10 @@ function Supervision({ overview }) {
           <h2 className="block-title section-title">Comptes par rôle</h2>
           <ul className="stat-list">
             {Object.entries(overview.accounts.by_role).map(([role, count]) => (
-              <li key={role}><span>{role}</span><strong>{count}</strong></li>
+              <li key={role}><span>{roleLabel(role)}</span><strong>{count}</strong></li>
             ))}
           </ul>
-        </div>
+        </article>
       </div>
     </>
   )
@@ -287,19 +358,33 @@ function Supervision({ overview }) {
 function Journal({ onToast }) {
   const [data, setData] = useState(null)
   const [filter, setFilter] = useState('')
-  const [limit, setLimit] = useState(100)
+  const [page, setPage] = useState(1)
+  const [size, setSize] = useState(25)
 
   const load = useCallback(async () => {
     try {
-      const query = new URLSearchParams({ limit: String(limit) })
+      const query = new URLSearchParams({ limit: String(size), offset: String((page - 1) * size) })
       if (filter) query.set('event_type', filter)
       setData(await request(`/admin/audit?${query}`))
     } catch (error) {
       onToast(error.message, 'error')
     }
-  }, [filter, limit, onToast])
+  }, [filter, page, size, onToast])
 
   useEffect(() => { load() }, [load])
+
+  const matching = data?.matching ?? data?.total ?? 0
+  const pages = Math.max(1, Math.ceil(matching / size))
+  const first = matching ? (page - 1) * size + 1 : 0
+  const last = (page - 1) * size + (data?.events.length ?? 0)
+
+  function exportPage() {
+    downloadCsv(`journal-${new Date().toISOString().slice(0, 10)}.csv`, [
+      ['Date', 'Compte', 'Service', 'Événement', 'Document'],
+      ...data.events.map((event) => [event.created_at, event.actor, event.actor_department ?? '', event.label,
+                                     event.document ?? '']),
+    ])
+  }
 
   return (
     <>
@@ -308,50 +393,59 @@ function Journal({ onToast }) {
         tentative de connexion échouée laisse une trace. Le journal est conservé aussi longtemps que
         la base : sa durée de rétention fait partie des arbitrages à rendre.
       </p>
-      <div className="filter-row">
-        <label>
-          Type d'événement
-          <select value={filter} onChange={(event) => setFilter(event.target.value)}>
+      <div className="toolbar-row">
+        <label className="compact-field">
+          <span>Type d'événement</span>
+          <select value={filter} onChange={(event) => { setFilter(event.target.value); setPage(1) }}>
             {AUDIT_FILTERS.map((item) => (
               <option key={item.value} value={item.value}>{item.label}</option>
             ))}
           </select>
         </label>
-        <label>
-          Nombre de lignes
-          <select value={limit} onChange={(event) => setLimit(Number(event.target.value))}>
-            {[50, 100, 200, 500].map((value) => <option key={value}>{value}</option>)}
-          </select>
-        </label>
-        <span className="muted">
-          {data ? `${data.events.length} affichés sur ${data.total} enregistrés` : 'Chargement…'}
+        <span className="muted small">
+          {data ? `${countOf(matching, 'événement')} · ${data.total.toLocaleString('fr-FR')} au total` : 'Chargement…'}
         </span>
+        <button type="button" className="ghost-button push-right" onClick={exportPage} disabled={!data?.events.length}>
+          <Icon name="download" /> Exporter la page
+        </button>
       </div>
-      <div className="table-scroll">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Compte</th>
-              <th>Service</th>
-              <th>Événement</th>
-              <th>Document</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data?.events.map((event) => (
-              <tr key={event.id} className={event.event_type === 'login_failed' ? 'row-warn' : ''}>
-                <td className="nowrap">{formatDate(event.created_at)}</td>
-                <td><strong>{event.actor}</strong></td>
-                <td className="muted">{event.actor_department ?? '—'}</td>
-                <td>{event.label}</td>
-                <td className="muted">{event.document ?? '—'}</td>
+      {!data ? (
+        <SkeletonRows rows={8} />
+      ) : data.events.length === 0 ? (
+        <EmptyState icon="shield" title="Aucun événement pour ce filtre" />
+      ) : (
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Date</th>
+                <th scope="col">Compte</th>
+                <th scope="col">Service</th>
+                <th scope="col">Événement</th>
+                <th scope="col">Document</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {data && !data.events.length && <p className="muted">Aucun événement pour ce filtre.</p>}
+            </thead>
+            <tbody>
+              {data.events.map((event) => (
+                <tr key={event.id} className={event.event_type === 'login_failed' ? 'row-warn' : ''}>
+                  <td className="nowrap">{formatDate(event.created_at)}</td>
+                  <td><strong>{event.actor}</strong></td>
+                  <td className="muted">{event.actor_department ?? '—'}</td>
+                  <td>{event.label}</td>
+                  <td className="muted">{event.document ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {data && matching > 0 && (
+        <div className="list-footer">
+          <PageSummary first={first} last={last} total={matching} noun="événement" />
+          <Pagination page={page} pages={pages} onPage={setPage} label="Pages du journal" />
+          <PageSizeSelect value={size} onChange={(value) => { setSize(value); setPage(1) }} options={[25, 50, 100]} />
+        </div>
+      )}
     </>
   )
 }
@@ -366,6 +460,7 @@ function Retours({ onToast }) {
 
   const shown = (entries ?? []).filter((entry) => only === 'all' || entry.verdict === only)
   const wrong = (entries ?? []).filter((entry) => entry.verdict === 'wrong').length
+  const pager = useClientPages(shown, 10, only)
 
   return (
     <>
@@ -380,96 +475,113 @@ function Retours({ onToast }) {
         qui sert ensuite à mesurer si un changement de modèle ou de découpage améliore ou dégrade
         les réponses. C'est là que ces lignes servent.
       </p>
-      <div className="filter-row">
-        <label>
-          Afficher
+      <div className="toolbar-row">
+        <label className="compact-field">
+          <span>Afficher</span>
           <select value={only} onChange={(event) => setOnly(event.target.value)}>
             <option value="all">Tous les avis</option>
             <option value="wrong">Signalés incorrects</option>
             <option value="useful">Jugés utiles</option>
           </select>
         </label>
-        <span className="muted">
-          {entries ? `${shown.length} affichés · ${wrong} à traiter` : 'Chargement…'}
-        </span>
+        <span className="muted small">{entries ? `${shown.length} affichés · ${wrong} à traiter` : 'Chargement…'}</span>
+        <button type="button" className="ghost-button push-right" disabled={!shown.length}
+                onClick={() => downloadCsv(`retours-${new Date().toISOString().slice(0, 10)}.csv`, [
+                  ['Date', 'Compte', 'Avis', 'Question', 'Commentaire'],
+                  ...shown.map((entry) => [entry.created_at, entry.author, entry.verdict === 'wrong' ? 'Incorrecte' : 'Utile',
+                                           entry.question ?? '', entry.comment ?? '']),
+                ])}>
+          <Icon name="download" /> Exporter
+        </button>
       </div>
-      <div className="table-scroll">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Compte</th>
-              <th>Avis</th>
-              <th>Question posée</th>
-              <th>Commentaire</th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map((entry) => (
-              <tr key={entry.id} className={entry.verdict === 'wrong' ? 'row-warn' : ''}>
-                <td className="nowrap">{formatDate(entry.created_at)}</td>
-                <td><strong>{entry.author}</strong></td>
-                <td>
-                  <span className={`verdict-pill ${entry.verdict}`}>
-                    {entry.verdict === 'wrong' ? 'Incorrecte' : 'Utile'}
-                  </span>
-                </td>
-                <td>{entry.question || <span className="muted">question non retrouvée</span>}</td>
-                <td className="muted">{entry.comment || '—'}</td>
+      {!entries ? (
+        <SkeletonRows rows={5} />
+      ) : shown.length === 0 ? (
+        <EmptyState icon="chat" title="Aucun avis pour ce filtre" />
+      ) : (
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Date</th>
+                <th scope="col">Compte</th>
+                <th scope="col">Avis</th>
+                <th scope="col">Question posée</th>
+                <th scope="col">Commentaire</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {entries && !shown.length && <p className="muted">Aucun avis pour ce filtre.</p>}
+            </thead>
+            <tbody>
+              {pager.slice.map((entry) => (
+                <tr key={entry.id} className={entry.verdict === 'wrong' ? 'row-warn' : ''}>
+                  <td className="nowrap">{formatDate(entry.created_at)}</td>
+                  <td><strong>{entry.author}</strong></td>
+                  <td>
+                    <span className={`verdict-pill ${entry.verdict}`}>
+                      {entry.verdict === 'wrong' ? 'Incorrecte' : 'Utile'}
+                    </span>
+                  </td>
+                  <td>{entry.question || <span className="muted">question non retrouvée</span>}</td>
+                  <td className="muted">{entry.comment || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <ListFooter pager={pager} noun="avis" label="Pages des retours" />
     </>
   )
 }
 
-export default function Administration({ user, section, onSection, onToast }) {
+export default function Administration({ user, section, onSection, onNavigate, onToast }) {
   const [overview, setOverview] = useState(null)
+
+  const load = useCallback(() => {
+    request('/admin/overview').then(setOverview).catch((error) => onToast(error.message, 'error'))
+  }, [onToast])
 
   useEffect(() => {
     if (user.role !== 'admin') return
-    request('/admin/overview').then(setOverview).catch((error) => onToast(error.message, 'error'))
-  }, [user.role, onToast])
+    load()
+  }, [user.role, load])
 
   if (user.role !== 'admin') {
     return (
       <section className="workspace">
-        <div className="empty-state">
-          <h3>Accès administrateur requis</h3>
-          <p>La supervision de l'agence est réservée aux administrateurs.</p>
-        </div>
+        <EmptyState icon="lock" title="Accès administrateur requis">
+          La supervision de l'agence est réservée aux administrateurs.
+        </EmptyState>
       </section>
     )
   }
 
+  const items = SECTIONS.map((item) => ({
+    ...item,
+    count: {
+      lacunes: overview?.gaps?.unanswered,
+      retours: overview?.feedback?.wrong,
+      contacts: overview?.contacts_missing?.length,
+    }[item.id],
+    tone: item.id === 'contacts' ? 'warn' : '',
+  }))
+
   return (
     <section className="workspace">
-      <div className="workspace-head">
-        <div>
-          <p className="overline">ADMINISTRATION</p>
-          <h1>Supervision de l'agence</h1>
-          <p>
-            L'état du corpus, des comptes et de l'activité, service par service.
-          </p>
-        </div>
-      </div>
-      <div className="segmented">
-        {SECTIONS.map((item) => (
-          <button
-            key={item.id}
-            className={section === item.id ? 'active' : ''}
-            onClick={() => onSection(item.id)}
-          >
-            <Icon name={item.icon} />
-            {item.label}
+      <PageHeader
+        icon="shield"
+        overline="ADMINISTRATION"
+        title="Supervision de l'agence"
+        actions={(
+          <button type="button" className="ghost-button" onClick={load}>
+            <Icon name="refresh" /> Actualiser
           </button>
-        ))}
-      </div>
+        )}
+      >
+        L'état du corpus, des comptes et de l'activité, service par service.
+      </PageHeader>
+      <SectionNav items={items} active={section} onChange={onSection} label="Sections de l'administration" />
       <div className="admin-panel">
-        {section === 'supervision' && <Supervision overview={overview} />}
+        {section === 'supervision' && <Supervision overview={overview} onNavigate={onNavigate} onSection={onSection} />}
         {section === 'journal' && <Journal onToast={onToast} />}
         {section === 'retours' && <Retours onToast={onToast} />}
         {section === 'lacunes' && <Gaps onToast={onToast} />}

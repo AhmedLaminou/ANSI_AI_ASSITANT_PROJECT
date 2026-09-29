@@ -8,6 +8,11 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { DOCUMENT_DEPARTMENTS, Field, Icon, formatDate, request } from './shared.jsx'
+import { Avatar, Bar, EmptyState, ListFooter, SearchInput, SkeletonRows, countOf, downloadCsv, useClientPages } from './ui.jsx'
+
+function fold(text = '') {
+  return String(text).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+}
 
 // ---------------------------------------------------------------------------
 // Gaps
@@ -17,6 +22,7 @@ export function Gaps({ onToast }) {
   const [data, setData] = useState(null)
   const [showResolved, setShowResolved] = useState(false)
   const [open, setOpen] = useState(null)
+  const [search, setSearch] = useState('')
 
   const load = useCallback(async () => {
     try {
@@ -44,6 +50,11 @@ export function Gaps({ onToast }) {
     }
   }
 
+  const gaps = (data?.gaps ?? []).filter((gap) =>
+    !search || fold(`${gap.representative} ${gap.questions.join(' ')}`).includes(fold(search)))
+  const pager = useClientPages(gaps, 10, `${search}|${showResolved}`)
+  const busiest = Math.max(1, ...gaps.map((gap) => gap.count))
+
   return (
     <>
       <p className="muted">
@@ -54,66 +65,86 @@ export function Gaps({ onToast }) {
       </p>
       <p className="muted">
         La plupart de ces refus viennent du modèle, qui a trouvé des extraits et les a jugés
-        insuffisants. Le regroupement est approximatif : deux questions voisines peuvent rester
-        séparées, et c'est plus sûr que l'inverse.
+        insuffisants. Le regroupement est approximatif : il aide à trier, il ne tranche pas.
       </p>
-      <div className="filter-row">
+      <div className="toolbar-row">
+        <SearchInput value={search} onChange={setSearch} label="Rechercher dans les lacunes"
+                     placeholder="Rechercher une question…" className="compact" />
         <label className="checkbox-line">
           <input type="checkbox" checked={showResolved} onChange={(event) => setShowResolved(event.target.checked)} />
           Inclure les lacunes déjà traitées
         </label>
-        <span className="muted">
-          {data ? `${data.gaps.length} lacune(s) · ${data.total_questions} question(s)` : 'Chargement…'}
+        <span className="muted small">
+          {data ? `${countOf(data.gaps.length, 'lacune')} · ${countOf(data.total_questions, 'question')}` : 'Chargement…'}
         </span>
+        <button type="button" className="ghost-button push-right" disabled={!gaps.length}
+                onClick={() => downloadCsv(`lacunes-${new Date().toISOString().slice(0, 10)}.csv`, [
+                  ['Question représentative', 'Demandes', 'Services', 'Première demande', 'Dernière demande'],
+                  ...gaps.map((gap) => [gap.representative, gap.count,
+                                        Object.entries(gap.departments).map(([label, count]) => `${label} (${count})`).join(', '),
+                                        gap.first_seen, gap.last_seen]),
+                ])}>
+          <Icon name="download" /> Exporter
+        </button>
       </div>
 
-      {data && !data.gaps.length && (
+      {!data ? (
+        <SkeletonRows rows={4} />
+      ) : !data.gaps.length ? (
         <p className="signal ok">
           <Icon name="check" />
           Aucune question sans réponse à traiter.
         </p>
+      ) : !gaps.length ? (
+        <EmptyState icon="search" title="Aucune lacune ne correspond à cette recherche" />
+      ) : (
+        <div className="gap-list">
+          {pager.slice.map((gap) => {
+            const key = gap.ids[0]
+            return (
+              <article key={key} className="gap-card">
+                <div className="gap-head">
+                  <span className="gap-count" aria-label={countOf(gap.count, 'demande')}>{gap.count}</span>
+                  <div className="gap-title">
+                    <strong>{gap.representative}</strong>
+                    <Bar value={gap.count} max={busiest} tone="warn" />
+                    <span className="muted">
+                      {Object.entries(gap.departments).map(([label, count]) => `${label} (${count})`).join(' · ')}
+                      {' — '}dernière demande le {formatDate(gap.last_seen)}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-button"
+                    aria-expanded={open === key}
+                    onClick={() => setOpen(open === key ? null : key)}
+                  >
+                    {open === key ? 'Masquer' : 'Détail'}
+                  </button>
+                  <button type="button" className="ghost-button" onClick={() => resolve(gap)}>
+                    <Icon name="check" /> Traitée
+                  </button>
+                </div>
+                {open === key && (
+                  <div className="gap-detail">
+                    <p className="overline">FORMULATIONS REÇUES</p>
+                    <ul>
+                      {gap.questions.map((question, position) => (
+                        <li key={position}>{question}</li>
+                      ))}
+                    </ul>
+                    <p className="muted">
+                      Motifs : {Object.entries(gap.reasons).map(([label, count]) => `${label} (${count})`).join(', ')}.
+                      Première demande le {formatDate(gap.first_seen)}.
+                    </p>
+                  </div>
+                )}
+              </article>
+            )
+          })}
+        </div>
       )}
-
-      <div className="gap-list">
-        {data?.gaps.map((gap, index) => (
-          <article key={gap.ids[0]} className="gap-card">
-            <div className="gap-head">
-              <span className="gap-count" aria-label={`${gap.count} demande(s)`}>{gap.count}</span>
-              <div className="gap-title">
-                <strong>{gap.representative}</strong>
-                <span className="muted">
-                  {Object.entries(gap.departments).map(([label, count]) => `${label} (${count})`).join(' · ')}
-                  {' — '}dernière demande le {formatDate(gap.last_seen)}
-                </span>
-              </div>
-              <button
-                className="text-button"
-                aria-expanded={open === index}
-                onClick={() => setOpen(open === index ? null : index)}
-              >
-                {open === index ? 'Masquer' : 'Détail'}
-              </button>
-              <button className="text-button" onClick={() => resolve(gap)}>
-                <Icon name="check" /> Traitée
-              </button>
-            </div>
-            {open === index && (
-              <div className="gap-detail">
-                <p className="overline">FORMULATIONS REÇUES</p>
-                <ul>
-                  {gap.questions.map((question, position) => (
-                    <li key={position}>{question}</li>
-                  ))}
-                </ul>
-                <p className="muted">
-                  Motifs : {Object.entries(gap.reasons).map(([label, count]) => `${label} (${count})`).join(', ')}.
-                  Première demande le {formatDate(gap.first_seen)}.
-                </p>
-              </div>
-            )}
-          </article>
-        ))}
-      </div>
+      <ListFooter pager={pager} noun="lacune" label="Pages des lacunes" />
     </>
   )
 }
@@ -229,6 +260,7 @@ export function ValidatedAnswerEditor({ initial, onClose, onSaved, onToast }) {
 export function ValidatedAnswers({ onToast }) {
   const [answers, setAnswers] = useState(null)
   const [editing, setEditing] = useState(null)
+  const [search, setSearch] = useState('')
 
   const load = useCallback(async () => {
     try {
@@ -255,6 +287,10 @@ export function ValidatedAnswers({ onToast }) {
     }
   }
 
+  const shown = (answers ?? []).filter((entry) =>
+    !search || fold(`${entry.question} ${entry.phrasings.join(' ')} ${entry.answer}`).includes(fold(search)))
+  const pager = useClientPages(shown, 10, search)
+
   return (
     <>
       <p className="muted">
@@ -262,55 +298,67 @@ export function ValidatedAnswers({ onToast }) {
         une nouvelle occasion de se tromper. Une réponse relue une fois est servie instantanément,
         signée. Elle se publie ici, ou directement depuis une réponse de l'assistant.
       </p>
-      <div className="filter-row">
-        <button className="primary" onClick={() => setEditing({})}>
+      <div className="toolbar-row">
+        <button type="button" className="primary" onClick={() => setEditing({})}>
           <Icon name="plus" /> Nouvelle réponse validée
         </button>
-        <span className="muted">{answers ? `${answers.length} réponse(s)` : 'Chargement…'}</span>
+        <SearchInput value={search} onChange={setSearch} label="Rechercher une réponse validée"
+                     placeholder="Rechercher une question ou une réponse…" className="compact" />
+        <span className="muted small push-right">{answers ? countOf(answers.length, 'réponse') : 'Chargement…'}</span>
       </div>
-      <div className="table-scroll">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Question</th>
-              <th>Visible par</th>
-              <th>Validée</th>
-              <th>Servie</th>
-              <th>État</th>
-              <th aria-label="Actions" />
-            </tr>
-          </thead>
-          <tbody>
-            {answers?.map((entry) => (
-              <tr key={entry.id} className={entry.active ? '' : 'row-muted'}>
-                <td>
-                  <strong>{entry.question}</strong>
-                  {entry.phrasings.length > 0 && (
-                    <span className="muted"> · +{entry.phrasings.length} formulation(s)</span>
-                  )}
-                </td>
-                <td>{entry.department_label}</td>
-                <td className="nowrap">
-                  {entry.validated_by}
-                  <br />
-                  <span className="muted">{formatDate(entry.validated_at, false)}</span>
-                </td>
-                <td>{entry.times_served} fois</td>
-                <td>{entry.active ? 'Active' : 'Retirée'}</td>
-                <td className="nowrap">
-                  <button className="text-button" onClick={() => setEditing(entry)}>
-                    Modifier
-                  </button>
-                  <button className="text-button" onClick={() => toggle(entry)}>
-                    {entry.active ? 'Retirer' : 'Rétablir'}
-                  </button>
-                </td>
+      {!answers ? (
+        <SkeletonRows rows={4} />
+      ) : !shown.length ? (
+        <EmptyState icon="check" title={answers.length ? 'Aucune réponse ne correspond' : "Aucune réponse validée pour l'instant"}>
+          {answers.length ? null : 'Publiez une bonne réponse de l’assistant d’un clic, ou rédigez-en une ici.'}
+        </EmptyState>
+      ) : (
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Question</th>
+                <th scope="col">Visible par</th>
+                <th scope="col">Validée</th>
+                <th scope="col">Servie</th>
+                <th scope="col">État</th>
+                <th scope="col"><span className="visually-hidden">Actions</span></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {answers && !answers.length && <p className="muted">Aucune réponse validée pour l'instant.</p>}
+            </thead>
+            <tbody>
+              {pager.slice.map((entry) => (
+                <tr key={entry.id} className={entry.active ? '' : 'row-muted'}>
+                  <td>
+                    <strong>{entry.question}</strong>
+                    {entry.phrasings.length > 0 && (
+                      <span className="muted"> · +{countOf(entry.phrasings.length, 'formulation')}</span>
+                    )}
+                  </td>
+                  <td>{entry.department_label}</td>
+                  <td className="nowrap">
+                    {entry.validated_by}
+                    <br />
+                    <span className="muted">{formatDate(entry.validated_at, false)}</span>
+                  </td>
+                  <td>{entry.times_served} fois</td>
+                  <td>
+                    <span className={`state-pill ${entry.active ? 'on' : 'off'}`}>{entry.active ? 'Active' : 'Retirée'}</span>
+                  </td>
+                  <td className="nowrap">
+                    <button type="button" className="text-button" onClick={() => setEditing(entry)}>
+                      Modifier
+                    </button>
+                    <button type="button" className="text-button" onClick={() => toggle(entry)}>
+                      {entry.active ? 'Retirer' : 'Rétablir'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <ListFooter pager={pager} noun="réponse" label="Pages des réponses validées" />
       {editing && (
         <ValidatedAnswerEditor
           initial={editing}
@@ -327,12 +375,13 @@ export function ValidatedAnswers({ onToast }) {
 // Contacts
 // ---------------------------------------------------------------------------
 
-function ContactRow({ contact, onSaved, onToast }) {
+function ContactCard({ contact, onSaved, onToast }) {
   const [name, setName] = useState(contact.name)
   const [email, setEmail] = useState(contact.email)
   const [phone, setPhone] = useState(contact.phone)
   const [note, setNote] = useState(contact.note)
   const [busy, setBusy] = useState(false)
+  const missing = !contact.name
 
   async function save(event) {
     event.preventDefault()
@@ -353,18 +402,24 @@ function ContactRow({ contact, onSaved, onToast }) {
   }
 
   return (
-    <form className="contact-row" onSubmit={save}>
-      <strong className="contact-service">{contact.department_label}</strong>
+    <form className={`contact-card ${missing ? 'missing' : ''}`} onSubmit={save}>
+      <div className="contact-card-head">
+        <Avatar name={name || contact.department_label} />
+        <div>
+          <strong className="contact-service">{contact.department_label}</strong>
+          <span className="muted small">{missing ? 'Aucun contact désigné' : name}</span>
+        </div>
+      </div>
       <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Nom"
              aria-label={`Nom du contact ${contact.department_label}`} minLength={2} required />
       <input type="email" value={email} onChange={(event) => setEmail(event.target.value)}
              placeholder="Adresse" aria-label={`Adresse du contact ${contact.department_label}`} />
-      <input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Téléphone"
+      <input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Téléphone ou poste"
              aria-label={`Téléphone du contact ${contact.department_label}`} />
       <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Précision (facultatif)"
              aria-label={`Précision pour ${contact.department_label}`} />
-      <button className="text-button" disabled={busy}>
-        {busy ? '…' : 'Enregistrer'}
+      <button className="ghost-button" disabled={busy}>
+        <Icon name="check" /> {busy ? 'Enregistrement…' : 'Enregistrer'}
       </button>
     </form>
   )
@@ -390,16 +445,18 @@ export function Contacts({ onToast }) {
       <p className="muted">
         Quand l'assistant ne peut pas répondre, il indique à qui s'adresser : le contact du service de
         l'agent, à défaut le contact général (« Transverse »). « Je ne trouve pas » est honnête ; «
-        adressez-vous à Amina, service RH » est utile.
+        adressez-vous à Amina, service RH » est utile. Un agent ne voit que le contact de son service
+        et le contact général.
       </p>
-      <p className="muted">
-        Un agent ne voit que le contact de son service et le contact général.
-      </p>
-      <div className="contact-list">
-        {contacts?.map((contact) => (
-          <ContactRow key={contact.department} contact={contact} onSaved={load} onToast={onToast} />
-        ))}
-      </div>
+      {!contacts ? (
+        <SkeletonRows rows={3} />
+      ) : (
+        <div className="contact-grid">
+          {contacts.map((contact) => (
+            <ContactCard key={contact.department} contact={contact} onSaved={load} onToast={onToast} />
+          ))}
+        </div>
+      )}
     </>
   )
 }
