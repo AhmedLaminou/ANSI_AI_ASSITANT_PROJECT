@@ -36,14 +36,15 @@ gouvernance et de la montée en charge** — voir
 | Jeu d'évaluation **par service** | ✅ 34 questions, relevé par périmètre |
 | Lacunes du corpus, contacts par service, réponses validées, questions de suite | ✅ 32 contrôles |
 | Import groupé et import de dossier, responsables et dates de révision | ✅ 24 contrôles |
-| Interface : ce que chaque écran envoie, accessibilité (axe, contrastes mesurés) | ✅ 34 tests |
+| Bibliothèque paginée : recherche sans accents, filtres avec compteurs, favoris, panneau de document | ✅ 25 contrôles |
+| Interface : ce que chaque écran envoie, accessibilité (axe, contrastes mesurés) | ✅ 54 tests |
 | Choix du modèle | ✅ Mesuré : la variante sans raisonnement égale l'actuelle, en 4,9 s au lieu de 34 s — **décision à prendre** |
 | Politique de rétention et de journalisation | ❌ À arbitrer — **bloquant pour les données réelles** |
 | Les dossiers individuels peuvent-ils être indexés ? | ❌ À arbitrer — une consigne ne protège pas |
 | Conteneurisation, reverse proxy, supervision, sauvegardes | ❌ Procédure écrite, jamais exécutée |
 | Tests de charge, mesures RAM/VRAM | ❌ Jamais faits |
 
-**360 contrôles côté serveur et 34 côté interface**, hors ligne, plus six sondes nécessitant le modèle local.
+**385 contrôles côté serveur et 54 côté interface**, hors ligne, plus six sondes nécessitant le modèle local.
 
 Le détail est dans [docs/ARCHITECTURE_TECHNIQUE.md](docs/ARCHITECTURE_TECHNIQUE.md) §8. Tant que les
 deux arbitrages ci-dessus ne sont pas rendus, n'utiliser que des documents non sensibles.
@@ -215,7 +216,7 @@ Puis, depuis `backend`, avec Ollama démarré :
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_units.py -q   # logique pure, rapide, sans Ollama
-.\.venv\Scripts\python.exe -m pytest tests/ -q                   # toute la suite hors ligne : 360 contrôles
+.\.venv\Scripts\python.exe -m pytest tests/ -q                   # toute la suite hors ligne : 385 contrôles
 .\.venv\Scripts\python.exe -m tests.smoke_rag                 # bout en bout, crée et supprime ses données
 .\.venv\Scripts\python.exe -m tests.evaluate                  # qualité par service (exactitude, sources, refus, latence)
 .\.venv\Scripts\python.exe -m tests.evaluate --model qwen3:0.6b   # comparer un autre modèle
@@ -231,7 +232,7 @@ Puis, depuis `backend`, avec Ollama démarré :
 Et depuis `frontend`, sans serveur ni modèle :
 
 ```powershell
-npm test      # 34 tests d'interface : ce que chaque écran envoie, et axe sur chaque écran principal
+npm test      # 54 tests d'interface : ce que chaque écran envoie, et axe sur chaque écran principal
 ```
 
 Le jeu d'évaluation est **découpé par service**, et c'est le point : améliorer les réponses

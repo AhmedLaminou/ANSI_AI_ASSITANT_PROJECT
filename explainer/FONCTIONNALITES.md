@@ -422,18 +422,60 @@ ni en réponse directe ni en streaming.
 
 ## 9. L'espace de travail
 
-- **Vue d'ensemble** : disponibilité des services locaux, nombre de documents accessibles.
-- **Assistant** : conversations personnelles (création, renommage, suppression), mémoire courte des
-  six derniers messages, sans partage entre comptes.
-- **Documents** : liste, recherche, filtrage par classification **et par service**, aperçu autorisé,
-  historique des versions.
-- **Utilisateurs** (administrateur) : file des demandes d'accès, création de compte avec rôle **et** service, rattachement d'un compte existant, activation/désactivation, réinitialisation.
-  service, rattachement d'un compte existant, activation/désactivation, réinitialisation.
-- Écran d'accueil listant **les documents réellement interrogeables** par le compte connecté, pour
-  que le périmètre soit visible avant la première question.
-- Thème clair/sombre, interface adaptative, **raccourcis clavier** (Alt+1 à 4 pour les sections,
-  Ctrl/Cmd+K pour la question, `?` pour l'aide).
+- **Accueil** : disponibilité des services locaux, chiffres du compte (documents lisibles,
+  conversations, questions posées), derniers documents et répartition par service — **les documents
+  réellement interrogeables** par le compte connecté, pour que le périmètre soit visible avant la
+  première question.
+- **Assistant** : conversations personnelles (création, renommage, suppression, recherche parmi
+  elles), mémoire courte des six derniers messages, sans partage entre comptes.
+- **Documents** : la bibliothèque, décrite ci-dessous.
+- **Comptes** (administrateur) : file des demandes d'accès, création de compte avec rôle **et**
+  service, rattachement d'un compte existant, activation/désactivation, réinitialisation ; recherche,
+  filtres par rôle, service et état, pagination, export CSV.
+- Thème clair/sombre, interface adaptative jusqu'au téléphone, **raccourcis clavier** (Alt+1 à 5
+  pour les sections, Ctrl/Cmd+K pour la question, `/` pour chercher un document, `?` pour l'aide).
 - Réponses formatées (listes, gras, code) et copie en un clic.
+
+### La bibliothèque, à l'échelle de l'agence
+
+`GET /documents` renvoyait **toute** la liste, que l'écran filtrait ensuite : sans effet sur trente
+documents, intenable sur quelques milliers — chaque ouverture de l'écran aurait transféré le corpus
+entier. La bibliothèque demande désormais **une page à la fois** (`GET /documents/page` : 10, 25 ou
+50 documents), et c'est le serveur qui cherche, filtre et trie :
+
+- **la recherche en cours de frappe** porte sur le titre, le nom du fichier, le service et le
+  responsable, **sans tenir compte des accents** — « conges » trouve « Congés » ;
+- **les filtres** — service, classification, format, état (révision dépassée ou proche, périmé,
+  sans responsable, « dont je suis responsable ») — affichent chacun **le nombre de documents qu'ils
+  donneraient**, calculé avec les autres filtres actifs : on choisit un filtre en sachant ce qu'il
+  rapporte, sans tomber sur une page vide ;
+- **le tri** : plus récents, plus anciens, titre, service, date de révision.
+
+> **Les compteurs ne trahissent rien.** Ils sont calculés *après* le contrôle d'accès : un agent RH ne
+> voit pas de filtre « Finances (12) », pas même à zéro. Un compteur calculé avant aurait dit combien
+> de documents existent hors de son périmètre — la forme de l'agence, encore.
+
+La vue tient dans l'adresse : `/documents?service=rh&statut=overdue` se met en favori ou s'envoie, et
+les points d'attention de la supervision y mènent directement.
+
+Deux recherches, deux coûts. Celle des titres est immédiate et n'appelle pas le modèle. Celle du
+**contenu** se lance à la demande : une vectorisation, quelques secondes, et des passages avec leur
+page — ceux-là mêmes que l'assistant lirait.
+
+Un document s'ouvre **dans un panneau latéral**, sans quitter la liste : service, classification,
+rôles autorisés, version, validité, responsable, révision, nombre d'extraits indexés et premiers
+extraits ; puis les actions — poser une question sur ce document, l'ajouter aux favoris et, pour
+l'administrateur, modifier son périmètre ou le supprimer. Une sélection se déplace vers un autre
+service ou se supprime d'un geste, document par document, avec le compte des échecs.
+
+La liste s'affiche en tableau ou en cartes — les cartes d'emblée sur un téléphone, où un tableau
+défilerait de côté — et la vue courante s'exporte en CSV. L'export neutralise toute cellule qui
+commence par `=`, `+`, `-` ou `@` : un titre saisi par un agent ne doit pas devenir une formule
+exécutée par le tableur de celui qui ouvre le fichier.
+
+> **Limite connue :** les **favoris** sont gardés dans le navigateur, par compte ; ils ne suivent pas
+> l'agent sur un autre poste. Une table côté serveur le permettrait — pour un confort, ce n'était pas
+> une migration de plus.
 
 ---
 
@@ -449,6 +491,10 @@ connu devait passer par quelqu'un d'autre.
 
 Le mot de passe actuel est exigé, pour qu'une session restée ouverte sur un poste non verrouillé ne
 permette pas à un passant d'enfermer le titulaire hors de son propre compte.
+
+Pendant la saisie, une jauge de robustesse coche quatre critères : 12 caractères, majuscules et
+minuscules, un chiffre, un caractère spécial. Seul le premier est exigé par le serveur ; les trois
+autres sont des conseils, pas des règles.
 
 > **Il n'existe pas d'écran du profil d'un autre agent**, et c'est délibéré : le périmètre d'un
 > compte est le sien, et consulter la fiche d'un autre serait une façon discrète d'apprendre la
@@ -472,39 +518,51 @@ d'y revenir.
 
 ### L'écran d'administration
 
-Un écran dédié, en trois volets, construit autour d'une idée : **un administrateur a besoin de voir
-l'agence service par service, pas en total**. Un corpus de 40 documents paraît sain jusqu'à ce qu'on
+Un écran dédié, en six volets — supervision, lacunes du corpus, réponses validées, contacts, journal
+d'audit, retours —, construit autour d'une idée : **un administrateur a besoin de voir l'agence
+service par service, pas en total**. Un corpus de 40 documents paraît sain jusqu'à ce qu'on
 remarque que 38 sont transverses et que la logistique n'a rien — ce qu'un chiffre global masque.
 
-**Supervision** — documents indexés, comptes actifs, demandes en attente, réponses signalées ; puis
-la répartition par service : documents, extraits indexés, comptes rattachés, dernier import. Un
-service sans document apparaît en surbrillance.
+**Supervision** — six chiffres : documents indexés, comptes actifs, demandes en attente, questions
+sans réponse, révisions dépassées, réponses signalées ; puis la répartition par service : documents,
+extraits indexés, comptes rattachés, dernier import. Un service sans document apparaît en
+surbrillance.
 
 L'écran énonce aussi ce que les chiffres **impliquent**, au lieu de laisser déduire un problème d'un
-zéro dans un tableau :
+zéro dans un tableau — et chaque point d'attention mène là où il se traite : « Voir les documents
+périmés » ouvre la bibliothèque déjà filtrée, « Traiter les demandes » l'écran des comptes.
 
 - des services sans aucun document, dont les agents ne liront que le transverse ;
 - des comptes rattachés à un service qui n'a pas de corpus ;
-- des comptes actifs sans service ;
-- des documents dépassant leur date de validité ;
+- des comptes actifs sans service, ou encore sans adresse professionnelle ;
+- des documents dépassant leur date de validité, à réviser, ou sans responsable ;
+- des questions restées sans réponse, des services sans contact désigné ;
 - une durée de rétention non fixée.
 
+Chaque phrase s'accorde avec son nombre — « 1 document a dépassé sa date de révision », « 4
+documents ont dépassé leur date » — plutôt que l'administratif « 1 document(s) ont dépassé ».
+
 **Journal d'audit** — chaque import, suppression, question répondue, appel d'outil, modification de
-compte et tentative de connexion échouée laisse une trace, filtrable par type. Ces événements étaient
-écrits par une douzaine d'endroits et **lus par aucun** : un journal que personne ne peut consulter
-n'est pas un journal.
+compte et tentative de connexion échouée laisse une trace, filtrable par type, **paginée par le
+serveur** et exportable en CSV. Ces événements étaient écrits par une douzaine d'endroits et **lus
+par aucun** : un journal que personne ne peut consulter n'est pas un journal.
 
 **Retours sur les réponses** — voir la section 10.
+
+Les autres listes — comptes, lacunes, réponses validées, retours — se parcourent aussi par pages,
+avec une recherche et un export : elles tiennent déjà en mémoire, la pagination y est donc faite par
+l'écran.
 
 > **Limite connue :** le journal affiche le service **actuel** de l'auteur, pas celui qu'il avait au
 > moment de l'événement. Conserver l'état historique demanderait de le figer à l'écriture.
 
 ### Des adresses réelles
 
-Chaque section a son URL — `/assistant`, `/documents`, `/utilisateurs`, `/administration`,
-`/administration/journal`, `/administration/retours`. Un administrateur peut mettre une page en
-favori ou l'envoyer à un collègue. Les adresses anglaises que l'on tape naturellement
-(`/admin`, `/admin/feedback`, `/admin/audit`) redirigent vers la forme canonique.
+Chaque section a son URL — `/assistant`, `/documents`, `/utilisateurs`, `/profil`,
+`/administration`, et un chemin par volet (`/administration/lacunes`, `/administration/journal`…).
+La bibliothèque y ajoute sa recherche, ses filtres, son tri et sa page. Un administrateur peut mettre
+une vue en favori ou l'envoyer à un collègue. Les adresses que l'on tape naturellement (`/admin`,
+`/admin/feedback`, `/admin/audit`, `/bibliotheque`) redirigent vers la forme canonique.
 
 Aucune bibliothèque de routage n'a été ajoutée : l'API History du navigateur et un écouteur
 suffisent, et un déploiement hors ligne a un paquet de moins à embarquer.
@@ -710,10 +768,11 @@ médiane : la charge de la machine domine la mesure.
 | Invalidation de session après changement de mot de passe | ✅ **corrigé le 28/09** — le dernier défaut de sécurité franc |
 | Lacunes, contacts, réponses validées, suites de question | ✅ 32 contrôles, modèles simulés |
 | Import (formulaire, groupé, dossier), responsables, révisions | ✅ 24 contrôles |
-| Interface : ce que chaque écran envoie | ✅ 34 tests Vitest |
+| Bibliothèque paginée : pages, filtres, compteurs calculés après le contrôle d'accès | ✅ 25 contrôles |
+| Interface : ce que chaque écran envoie | ✅ 54 tests Vitest |
 | Accessibilité | ✅ axe sur chaque écran principal ; contrastes mesurés |
 
-**360 contrôles côté serveur et 34 côté interface**, hors ligne, plus six sondes nécessitant le modèle local.
+**385 contrôles côté serveur et 54 côté interface**, hors ligne, plus six sondes nécessitant le modèle local.
 
 ---
 

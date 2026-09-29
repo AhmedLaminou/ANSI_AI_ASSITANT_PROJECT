@@ -31,7 +31,7 @@ From `backend/`:
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload   # API (voir note ci-dessous)
-.\.venv\Scripts\python.exe -m pytest tests/ -q               # whole offline suite: 360 checks
+.\.venv\Scripts\python.exe -m pytest tests/ -q               # whole offline suite: 385 checks
 .\.venv\Scripts\python.exe -m pytest tests/test_units.py -q  # fast subset, no Ollama needed
 .\.venv\Scripts\python.exe -m tests.smoke_rag                # end to end, slow, needs Ollama
 .\.venv\Scripts\python.exe -m tests.evaluate                 # quality per department: accuracy, sources, refusals, latency

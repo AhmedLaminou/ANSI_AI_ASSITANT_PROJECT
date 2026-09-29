@@ -516,7 +516,7 @@ sudo -u ansi /opt/ansi-assistant/2026-10-15/backend/.venv/bin/python -m pip inst
 
 # 4. Vérifier avant de basculer
 cd /opt/ansi-assistant/2026-10-15/backend
-sudo -u ansi .venv/bin/python -m pytest tests/ -q          # 360 contrôles, sans modèle
+sudo -u ansi .venv/bin/python -m pytest tests/ -q          # 385 contrôles, sans modèle
 sudo -u ansi .venv/bin/python -m tests.isolation_probe     # rien ne sort
 sudo -u ansi .venv/bin/python -m tests.security_probe      # injection de prompt
 

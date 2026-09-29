@@ -13,7 +13,7 @@ Ce document décrit **ce qui est réellement implémenté aujourd'hui**, puis **
 
 | Couche | Choix actuel | Fichier principal |
 |---|---|---|
-| Interface | React 19 + Vite, sans framework UI | [`frontend/src/App.jsx`](../frontend/src/App.jsx) |
+| Interface | React 19 + Vite, sans framework UI | [`frontend/src/App.jsx`](../frontend/src/App.jsx) ; bibliothèque : [`Documents.jsx`](../frontend/src/Documents.jsx) ; pièces communes (pagination, panneau, badges) : [`ui.jsx`](../frontend/src/ui.jsx) |
 | API | FastAPI (Python), ASGI via uvicorn | [`backend/app/main.py`](../backend/app/main.py) |
 | Authentification | JWT en cookie `HttpOnly`, hachage Argon2 (`pwdlib`) | [`backend/app/auth.py`](../backend/app/auth.py) |
 | Base de données | SQLite ou PostgreSQL + pgvector, via SQLAlchemy 2.0 | [`backend/app/database.py`](../backend/app/database.py) |
@@ -1193,13 +1193,21 @@ Couverture : `tests/test_documents_lifecycle.py`, 24 contrôles, embeddings simu
 
 ### 5.16 Interface : tests et accessibilité
 
-Les 34 tests d'interface (`npm test` : Vitest, Testing Library, jsdom) vérifient **ce que chaque
+Les 54 tests d'interface (`npm test` : Vitest, Testing Library, jsdom) vérifient **ce que chaque
 écran envoie** au serveur — l'adresse et le service à la création d'un compte, une formulation par
 ligne pour une réponse validée, une demande de mot de passe oublié adressée à l'administrateur et
 non une réinitialisation — et ce qu'il affiche de ses réponses, y compris une erreur de validation
 qui s'affichait `[object Object]`.
 
-Huit d'entre eux passent **axe-core** sur chaque écran principal. Ce qu'axe a trouvé, et qui est
+Vingt d'entre eux ([`tests/library.test.jsx`](../frontend/tests/library.test.jsx)) portent sur la
+bibliothèque et les listes (§5.17). Ce qui s'y vérifie est **ce qui part vers le serveur** : sur un
+corpus de dix documents, un filtre jamais transmis ressemble à un filtre qui marche. La page demandée
+et la suivante, la recherche envoyée après la frappe, le service choisi, les favoris demandés par
+leurs numéros, une sélection déplacée document par document ; et côté affichage, aucune case de
+sélection ni action d'administration pour un lecteur, les comptes paginés et cherchés, un export CSV
+qui neutralise les formules.
+
+Dix d'entre eux passent **axe-core** sur chaque écran principal, panneau d'un document compris. Ce qu'axe a trouvé, et qui est
 corrigé : des champs dont le nom annoncé par un lecteur d'écran avalait le texte d'aide (le nom est
 désormais le seul libellé, l'aide est reliée par `aria-describedby`), des boutons sans nom, un titre
 `h1` suivi d'un `h3`, un `role="dialog"` posé sur un formulaire, des listes de filtre sans nom.
@@ -1212,6 +1220,56 @@ statut annoncé par phase plutôt que mot par mot.
 
 Ce que ce n'est pas : un audit RGAA. axe détecte ce qui se mesure automatiquement ; une navigation
 réelle au lecteur d'écran n'a pas été faite.
+
+### 5.17 Bibliothèque paginée
+
+`GET /documents` renvoyait toute la liste, filtrée ensuite par l'écran (ancienne dette §7.3). La
+bibliothèque passe désormais par **`GET /documents/page`**, dont la logique est dans
+[`backend/app/browse.py`](../backend/app/browse.py). `GET /documents` demeure pour les sondes et les
+tests ; aucun écran ne l'appelle plus.
+
+| Paramètre | Effet |
+|---|---|
+| `page`, `size` | page demandée (≥ 1) et taille (1 à 100 ; l'écran propose 10, 25, 50). Une page au-delà de la dernière renvoie la dernière |
+| `q` | chaque mot doit figurer dans le titre, le nom du fichier, le service ou le responsable — accents et casse ignorés |
+| `department`, `classification`, `format` | filtres ; `format` parmi `pdf`, `docx`, `txt`, `md` |
+| `status` | `overdue`, `due_soon`, `expired`, `unowned`, `mine` |
+| `sort` | `recent` (défaut), `oldest`, `title`, `department`, `review` |
+| `superseded` | inclure les versions remplacées |
+| `ids` | restreindre à une liste de numéros — la vue « Favoris » |
+
+La réponse porte la page (`items`, `total`, `page`, `pages`, `first`, `last`), `readable_total` —
+ce que le compte peut lire, filtres levés — et un **compteur par valeur de filtre** (`facets`). Une
+valeur inconnue répond 422 par une phrase (« Tri inconnu. Valeurs acceptées : … »), comme le reste de
+l'API.
+
+Deux choix méritent d'être notés :
+
+- **Le contrôle d'accès passe avant tout calcul.** Les documents lisibles sont d'abord établis par
+  `can_access_document` — la fonction qui décide pour la recherche —, puis seulement cherchés,
+  comptés et découpés en pages. Un compteur calculé avant aurait dit combien de documents existent
+  hors du périmètre du compte. Les tests vérifient qu'un lecteur RH ne reçoit aucun compteur
+  « finance », pas même à zéro, et que la liste `ids` d'un favori ne fait pas lire un document
+  interdit.
+- **Les compteurs sont disjonctifs** : celui d'un service est calculé avec tous les autres filtres
+  actifs, *sauf* celui de service. L'écran montre ainsi ce que donnerait un autre service, au lieu
+  de compteurs qui tombent à zéro dès qu'un service est choisi.
+
+Le filtrage se fait en Python, sur les documents lisibles : c'est la condition pour réutiliser la
+règle d'accès telle quelle, et le coût est une lecture des métadonnées, pas des extraits — sans
+enjeu jusqu'à quelques milliers de documents. Au-delà, il faudrait exprimer la règle en SQL, donc la
+dédoubler ; c'est précisément ce que le projet a évité jusqu'ici (§3 bis), et ce jour-là il faudra
+un test qui confronte les deux.
+
+L'écran ([`frontend/src/Documents.jsx`](../frontend/src/Documents.jsx)) garde recherche, filtres, tri
+et page dans l'adresse (`/documents?service=rh&statut=overdue&page=2`) et n'envoie la recherche
+que 300 ms après la dernière frappe. Les favoris restent dans le navigateur (`localStorage`, par
+compte) : ils ne suivent pas l'agent d'un poste à l'autre.
+
+Les autres listes — comptes, lacunes, réponses validées, retours — tiennent en mémoire et sont
+paginées par l'écran ; le journal d'audit, qui grandit sans fin, l'est par le serveur (`offset`).
+
+Couverture : `tests/test_documents_browse.py`, 25 contrôles.
 
 ---
 
@@ -1253,6 +1311,7 @@ Correspondance avec les phases du document d'architecture (§34).
 | 2 | Responsables et dates de révision des documents | ✅ Fait (§5.15) |
 | 3 | Lacunes du corpus, contacts, réponses validées, questions de suite | ✅ Fait (§5.14) |
 | 5 | Tests d'interface et accessibilité | ✅ Fait (§5.16) |
+| 5 | Bibliothèque paginée : recherche sans accents, filtres avec compteurs, tri, favoris | ✅ Fait (§5.17) |
 | 4 | Sessions révocables, mot de passe provisoire imposé, mot de passe oublié via l'administrateur | ✅ Fait (§5.9) |
 | 4 | **Politique** de rétention et de journalisation | ❌ À arbitrer — **bloquant pour la production** |
 | 4 | SSO / LDAP | ❌ À faire |
@@ -1260,15 +1319,16 @@ Correspondance avec les phases du document d'architecture (§34).
 | 5 | Procédure de mise à jour hors ligne | ⚠️ Rédigée ([DEPLOYMENT_ON_ANSI_SERVERS.md](../explainer/DEPLOYMENT_ON_ANSI_SERVERS.md)), jamais exercée |
 | 5 | Tests de charge et de sécurité | ❌ À faire |
 
-Couverture de tests, hors ligne : **360 contrôles côté serveur** — `tests/test_units.py` (81, logique
+Couverture de tests, hors ligne : **385 contrôles côté serveur** — `tests/test_units.py` (81, logique
 pure), `tests/test_access.py` (40 contrôles de périmètre, toutes les paires de services dans les deux
 sens), `tests/test_prompts.py` (32, composition des consignes), `tests/test_knowledge.py` (32,
 lacunes, contacts, réponses validées, suites), `tests/test_administration.py` (31, supervision et
 erreurs lisibles), `tests/test_dataset.py` (32, intégrité du jeu d'évaluation),
-`tests/test_regressions.py` (25, défauts trouvés en usage), `tests/test_glossary.py` (24,
+`tests/test_regressions.py` (25, défauts trouvés en usage), `tests/test_documents_browse.py` (25,
+bibliothèque paginée), `tests/test_glossary.py` (24,
 glossaires par service), `tests/test_documents_lifecycle.py` (24, import, responsables, révisions),
 `tests/test_sessions.py` (20, sessions et mots de passe), `tests/test_profile_and_scope.py` (19,
-profil et périmètre d'un document) — **et 34 côté interface** (`npm test`, §5.16).
+profil et périmètre d'un document) — **et 54 côté interface** (`npm test`, §5.16).
 
 Sondes nécessitant Ollama : `tests/smoke_rag.py` (bout en bout), `tests/security_probe.py`
 (injection de prompt et fuite entre services), `tests/isolation_probe.py` (réseau sortant et
@@ -1306,8 +1366,9 @@ RAM/VRAM, ni le nombre d'utilisateurs simultanés soutenables.
 1. **`allowed_roles` en chaîne CSV** — pas de contrainte d'intégrité ; deviendrait un tableau
    PostgreSQL ou une table de jointure.
 2. **ACL au niveau du document uniquement** — pas de restriction par section ou par page.
-3. **Pas de pagination** — `GET /documents` renvoie tout. Sans effet à l'échelle actuelle, bloquant
-   à quelques centaines de documents.
+3. ~~**Pas de pagination**~~ — **résolu le 29/09** : la bibliothèque demande une page à la fois
+   (`GET /documents/page`, §5.17). Reste que le filtrage se fait en Python sur les documents
+   lisibles : suffisant jusqu'à quelques milliers de documents, à reporter en SQL au-delà.
 4. ~~**Pas d'invalidation de session**~~ — **résolu le 28/09** : génération de sessions par compte,
    comparée à chaque requête (§5.9).
 5. **Mémoire conversationnelle à fenêtre fixe** — les 6 derniers messages, sans résumé des échanges
@@ -1368,8 +1429,8 @@ prompt et d'isolement, supervision et journal consultable, profil et changement 
 passe, périmètre d'un document révisable, dépendances verrouillées, authentification par adresse et
 sessions révocables, lacunes du corpus, contacts, réponses validées, questions de suite,
 responsables et dates de révision, import groupé et import de dossier, accessibilité, cause de la
-latence mesurée et modèle sans raisonnement comparé — et 360 contrôles côté serveur plus 34 côté
-interface, hors ligne.
+latence mesurée et modèle sans raisonnement comparé, bibliothèque paginée — et 385 contrôles côté
+serveur plus 54 côté interface, hors ligne.
 
 **Reste, dans cet ordre :**
 
@@ -1401,5 +1462,6 @@ interface, hors ligne.
 
 8. **SSO / LDAP**, puis **conteneurisation, supervision, sauvegardes**, procédure de mise à jour
    hors ligne, tests de charge.
-9. **Limitation de débit partagée** (§7.9) et **pagination** de `GET /documents` (§7.3), le jour où
-   l'API est répliquée ou le corpus dépasse quelques centaines de documents.
+9. **Limitation de débit partagée** (§7.9), le jour où l'API est répliquée ; et le filtrage de la
+   bibliothèque en SQL (§5.17), le jour où le corpus dépasse quelques milliers de documents — la
+   pagination elle-même est faite.

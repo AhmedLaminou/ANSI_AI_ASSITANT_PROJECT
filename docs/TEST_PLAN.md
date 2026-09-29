@@ -4,8 +4,8 @@ Procédure **manuelle**, à dérouler dans l'interface avant une démonstration 
 Elle complète les contrôles automatiques, qui la précèdent :
 
 ```powershell
-cd backend;  .\.venv\Scripts\python.exe -m pytest tests/ -q     # 360 contrôles, sans modèle
-cd frontend; npm test                                           # 34 tests d'interface, dont l'accessibilité
+cd backend;  .\.venv\Scripts\python.exe -m pytest tests/ -q     # 385 contrôles, sans modèle
+cd frontend; npm test                                           # 54 tests d'interface, dont l'accessibilité
 ```
 
 ## Préconditions
@@ -38,6 +38,25 @@ cd frontend; npm test                                           # 34 tests d'int
 4. Se connecter avec le compte finances : le document finances est visible, le document `admin` non.
 5. Demander « à quoi ai-je accès ? » avec chaque compte : la réponse doit correspondre à ce qui
    précède.
+
+## Bibliothèque
+
+Avec au moins onze documents importés. Sur le poste de développement, `backend/data/corpus-de-test/`
+(non versionné) en fournit trente-cinq, fictifs, avec leur mode d'emploi.
+
+1. La liste affiche dix documents et « 1–10 sur N » ; la page 2 affiche la suite ; « Par page : 25 »
+   les montre d'un coup.
+2. Chercher « conges », sans accent : les documents « Congés » apparaissent.
+3. Chaque filtre de service annonce son nombre de documents. Connecté avec le compte RH, **aucun
+   filtre « Finances » ne doit apparaître**, pas même à zéro.
+4. Filtre « Périmés » : seuls restent les documents dont la date de validité est passée.
+5. Ajouter un document aux favoris (l'étoile), puis choisir « Favoris » : il est seul.
+6. Ouvrir un document : le panneau latéral montre service, classification, version, responsable,
+   révision et premiers extraits ; « Poser une question » ouvre l'assistant avec « À propos du
+   document « … » : » déjà saisi.
+7. Coller l'adresse d'une vue filtrée (`/documents?service=rh&statut=overdue`) dans un autre onglet :
+   la même vue s'affiche.
+8. À la largeur d'un téléphone, la bibliothèque s'affiche en cartes et aucun écran ne défile de côté.
 
 ## Tests d'authentification
 
