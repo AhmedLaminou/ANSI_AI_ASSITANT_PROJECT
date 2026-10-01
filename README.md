@@ -11,9 +11,14 @@ documents que **son rôle et son service** autorisent.
 > lui. Voir [docs/A_PROPOS_DU_PROJET.md](docs/A_PROPOS_DU_PROJET.md) pour la comparaison détaillée,
 > et [explainer/FONCTIONNALITES.md](explainer/FONCTIONNALITES.md) pour l'inventaire complet.
 
-## Aperçu
+## Démonstration vidéo
 
-![Accueil de l'assistant : services locaux disponibles, documents lisibles par le compte, derniers documents par service](docs/captures/03-accueil.png)
+[![Démonstration de l'assistant documentaire local de l'ANSI — cliquer pour voir la vidéo sur YouTube](docs/captures/video-miniature.png)](https://youtu.be/fk3aMY4KbVM)
+
+▶️ **[Voir la démonstration sur YouTube](https://youtu.be/fk3aMY4KbVM)** — connexion, questions sourcées,
+refus quand l'information est absente, cloisonnement par service, import et supervision.
+
+## Aperçu
 
 <table>
   <tr>
