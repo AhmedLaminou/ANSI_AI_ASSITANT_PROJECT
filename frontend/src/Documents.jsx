@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 
-import { CLASSIFICATIONS, DOCUMENT_DEPARTMENTS, Icon, ROLES, formatDate, request, roleLabel } from './shared.jsx'
+import { API_URL, CLASSIFICATIONS, DOCUMENT_DEPARTMENTS, Icon, ROLES, formatDate, request, roleLabel } from './shared.jsx'
 import {
   Chip,
   Drawer,
@@ -319,6 +319,7 @@ export function DocumentDrawer({ documentId, user, favorites, onClose, onChanged
         ) : (
           <div className="drawer-body">
             <div className="drawer-actions">
+              <OriginalFileLink document={document} />
               {onAsk && (
                 <button type="button" className="primary" onClick={() => onAsk(document)}>
                   <Icon name="chat" /> Poser une question
@@ -360,7 +361,11 @@ export function DocumentDrawer({ documentId, user, favorites, onClose, onChanged
               <div><dt>Révision</dt><dd><ReviewBadge status={document.review_status} due={document.review_due} /></dd></div>
               <div><dt>Extraits indexés</dt><dd>{preview.chunks_total ?? preview.chunks.length}</dd></div>
             </dl>
-            <h3 className="drawer-section">Premiers extraits</h3>
+            <h3 className="drawer-section">
+              {preview.chunks.length < (preview.chunks_total ?? 0)
+                ? `Aperçu : ${preview.chunks.length === 1 ? 'le premier extrait' : `les ${preview.chunks.length} premiers extraits`} sur ${preview.chunks_total}`
+                : 'Aperçu : extraits indexés'}
+            </h3>
             {preview.chunks.length ? (
               <ol className="excerpt-list">
                 {preview.chunks.map((chunk, index) => (
@@ -388,6 +393,25 @@ export function DocumentDrawer({ documentId, user, favorites, onClose, onChanged
         />
       )}
     </>
+  )
+}
+
+/** The whole document as imported. A plain link rather than a fetch: the browser's own
+ * PDF viewer opens it, with its real file name, and the session cookie goes with it. A
+ * DOCX cannot be shown by a browser, so it is offered as a download. */
+function OriginalFileLink({ document }) {
+  const href = `${API_URL}/documents/${document.id}/file`
+  if (document.filename.toLowerCase().endsWith('.docx')) {
+    return (
+      <a className="primary button-link" href={`${href}?download=true`}>
+        <Icon name="download" /> Télécharger le document
+      </a>
+    )
+  }
+  return (
+    <a className="primary button-link" href={href} target="_blank" rel="noopener noreferrer">
+      <Icon name="external" /> Ouvrir le document complet
+    </a>
   )
 }
 

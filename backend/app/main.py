@@ -12,7 +12,7 @@ import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -911,6 +911,54 @@ def preview_document(
     }
 
 
+# How the original file is handed back. The type comes from the extension, never from
+# the Content-Type sent at upload: a ".md" declared "text/html" must not render as a page.
+# Markdown and text are served as plain text for the same reason. A browser cannot show a
+# DOCX, so it is always a download.
+ORIGINAL_FILE_TYPES = {
+    ".pdf": ("application/pdf", "inline"),
+    ".txt": ("text/plain; charset=utf-8", "inline"),
+    ".md": ("text/plain; charset=utf-8", "inline"),
+    ".docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "attachment"),
+}
+
+
+@app.get("/documents/{document_id}/file")
+def original_document(
+    document_id: int,
+    download: bool = False,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """The whole document as it was imported, under the same rule as the preview.
+
+    The preview shows a few indexed excerpts; this is the file itself. An unreadable
+    document answers 404, exactly like one that does not exist.
+    """
+    document = db.get(DocumentRecord, document_id)
+    if not document or not can_access_document(user, document):
+        raise HTTPException(status_code=404, detail="Document introuvable")
+    media_type, disposition = ORIGINAL_FILE_TYPES.get(
+        Path(document.original_filename).suffix.lower(), ("application/octet-stream", "attachment")
+    )
+    storage_path = DOCUMENT_STORAGE_DIR / document.stored_filename
+    if not storage_path.is_file():
+        raise HTTPException(status_code=404, detail="Le fichier original n'est plus disponible sur le serveur.")
+    db.add(AuditEvent(actor_id=user.id, document_id=document.id, event_type="document_opened"))
+    db.commit()
+    return FileResponse(
+        storage_path,
+        media_type=media_type,
+        filename=document.original_filename,
+        content_disposition_type="attachment" if download else disposition,
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            # Internal documents: not kept in a shared cache or on the agent's disk.
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
 def owner_names(db: Session, documents: list[DocumentRecord]) -> dict[int, str]:
     owner_ids = {document.owner_id for document in documents if document.owner_id}
     if not owner_ids:
@@ -1565,6 +1613,7 @@ def list_feedback(
 AUDIT_LABELS: dict[str, str] = {
     "document_uploaded": "Document importé",
     "document_deleted": "Document supprimé",
+    "document_opened": "Document original consulté",
     "document_question_answered": "Question répondue sur document",
     "login_failed": "Tentative de connexion échouée",
     "user_created": "Compte créé",

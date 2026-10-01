@@ -3597,6 +3597,12 @@ kbd {
   margin-bottom: 16px;
 }
 
+/* A link that looks like the buttons beside it. */
+.button-link,
+.button-link:hover {
+  text-decoration: none;
+}
+
 .drawer-alerts {
   display: grid;
   gap: 8px;

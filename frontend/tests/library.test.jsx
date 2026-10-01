@@ -129,6 +129,34 @@ describe('the library', () => {
     expect(await accessibilityViolations(container)).toEqual([])
   })
 
+  it('offers the whole document, not only its first excerpts', async () => {
+    scriptFetch({
+      'GET /documents/page': { body: libraryPage(TWO) },
+      'GET /documents/1/preview': { body: { document: TWO[0], chunks: [{ page: 1, content: 'Début.' }], chunks_total: 14 } },
+    })
+    render(<DocumentsView user={READER} onToast={() => undefined} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Procédure congés' }))
+    const panel = await screen.findByRole('dialog', { name: 'Procédure congés' })
+    const link = within(panel).getByRole('link', { name: /Ouvrir le document complet/ })
+    expect(link.getAttribute('href')).toMatch(/\/documents\/1\/file$/)
+    expect(link.getAttribute('target')).toBe('_blank')
+    // The excerpts say what they are: a beginning, not the document.
+    expect(within(panel).getByText('Aperçu : le premier extrait sur 14')).toBeTruthy()
+  })
+
+  it('offers a Word document as a download, which a browser cannot display', async () => {
+    const word = doc(3, 'Note de service', { filename: 'note_de_service.docx' })
+    scriptFetch({
+      'GET /documents/page': { body: libraryPage([word]) },
+      'GET /documents/3/preview': { body: { document: word, chunks: [], chunks_total: 0 } },
+    })
+    render(<DocumentsView user={READER} onToast={() => undefined} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Note de service' }))
+    const panel = await screen.findByRole('dialog', { name: 'Note de service' })
+    const link = within(panel).getByRole('link', { name: /Télécharger le document/ })
+    expect(link.getAttribute('href')).toMatch(/\/documents\/3\/file\?download=true$/)
+  })
+
   it('moves a selection to another service, document by document', async () => {
     const calls = scriptFetch({
       'GET /documents/page': { body: libraryPage(TWO) },

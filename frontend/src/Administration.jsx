@@ -55,6 +55,7 @@ const AUDIT_FILTERS = [
 const ACTIVITY_LABELS = {
   document_uploaded: 'Documents importés',
   document_deleted: 'Documents supprimés',
+  document_opened: 'Documents consultés',
   document_scope_updated: 'Périmètres modifiés',
   document_question_answered: 'Questions répondues',
   validated_answer_served: 'Réponses validées servies',
