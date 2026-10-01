@@ -23,3 +23,7 @@ frontend/dist/
 .vscode/
 .idea/
 Thumbs.db
+
+# Captures brutes : certaines montrent des données personnelles de tiers.
+# Celles publiées sont choisies et copiées dans docs/captures/.
+demoImages/

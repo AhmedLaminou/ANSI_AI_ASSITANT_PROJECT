@@ -11,6 +11,60 @@ documents que **son rôle et son service** autorisent.
 > lui. Voir [docs/A_PROPOS_DU_PROJET.md](docs/A_PROPOS_DU_PROJET.md) pour la comparaison détaillée,
 > et [explainer/FONCTIONNALITES.md](explainer/FONCTIONNALITES.md) pour l'inventaire complet.
 
+## Aperçu
+
+![Accueil de l'assistant : services locaux disponibles, documents lisibles par le compte, derniers documents par service](docs/captures/03-accueil.png)
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/captures/01-connexion.png" alt="Écran de connexion par adresse professionnelle">
+      <p align="center"><b>Connexion</b> — par adresse professionnelle ; ni les questions ni les documents ne quittent les serveurs de l'ANSI.</p>
+    </td>
+    <td width="50%">
+      <img src="docs/captures/02-demande-acces.png" alt="Formulaire de demande d'accès">
+      <p align="center"><b>Demande d'accès</b> — le compte reste sans droits jusqu'à ce que l'administrateur accorde un rôle et un service.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/captures/04-assistant.png" alt="Écran de l'assistant avec les documents interrogeables">
+      <p align="center"><b>Assistant</b> — le périmètre de l'agent est affiché avant la première question ; chaque réponse cite ses sources.</p>
+    </td>
+    <td width="50%">
+      <img src="docs/captures/05-document-complet.png" alt="Panneau d'un document avec le bouton Ouvrir le document complet">
+      <p align="center"><b>Détail d'un document</b> — service, rôles autorisés, responsable, révision, et ouverture du document complet.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/captures/06-import.png" alt="Formulaire d'import de documents">
+      <p align="center"><b>Import</b> — PDF (y compris scannés, OCR local), Word, texte ou Markdown, jusqu'à 50 fichiers à la fois.</p>
+    </td>
+    <td width="50%">
+      <img src="docs/captures/07-perimetre.png" alt="Modification du périmètre d'un document">
+      <p align="center"><b>Périmètre d'un document</b> — service, rôles et responsable modifiables sans réindexation.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/captures/08-comptes.png" alt="Gestion des comptes et des accès">
+      <p align="center"><b>Comptes et accès</b> — le rôle dit ce qu'un compte peut faire, le service ce qu'il peut lire.</p>
+    </td>
+    <td width="50%">
+      <img src="docs/captures/09-supervision.png" alt="Supervision de l'agence">
+      <p align="center"><b>Supervision</b> — corpus, comptes, lacunes, réponses validées, journal d'audit, service par service.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/captures/10-profil.png" alt="Profil d'un agent">
+      <p align="center"><b>Profil</b> — ce que l'agent peut lire, et ce qu'il ne peut pas lire.</p>
+    </td>
+    <td width="50%"></td>
+  </tr>
+</table>
+
 ## Statut
 
 **Les fonctions métier sont achevées, mesurées et testées. Ce qui reste relève du déploiement, de la
